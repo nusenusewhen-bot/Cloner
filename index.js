@@ -1,5 +1,5 @@
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, Partials } = require('discord.js');
 const Database = require('better-sqlite3');
 const { getSuperProperties } = require('./superprops');
 
@@ -12,6 +12,7 @@ db.exec(`
 
 const OWNER_ID = '1422945082746601594';
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const PREFIX = '!';
 
 if (!BOT_TOKEN) {
   console.error('BOT_TOKEN not found');
@@ -19,55 +20,33 @@ if (!BOT_TOKEN) {
 }
 
 const bot = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Channel]
 });
 
 function generateKey() {
   return 'CLONE-' + Math.random().toString(36).substring(2, 15).toUpperCase();
 }
 
-const commands = [
-  new SlashCommandBuilder().setName('clonekey').setDescription('Generate clone key').setDefaultMemberPermissions(0),
-  new SlashCommandBuilder().setName('revoke').setDescription('Revoke a key').addStringOption(opt => opt.setName('key').setDescription('Key to revoke').setRequired(true)).setDefaultMemberPermissions(0),
-  new SlashCommandBuilder().setName('access').setDescription('Give unlimited access').addUserOption(opt => opt.setName('user').setDescription('User').setRequired(true)).setDefaultMemberPermissions(0),
-  new SlashCommandBuilder().setName('redeemkey').setDescription('Redeem a clone key').addStringOption(opt => opt.setName('key').setDescription('Your key').setRequired(true)),
-  new SlashCommandBuilder().setName('serverclone').setDescription('Open clone panel')
-];
-
-bot.once('ready', async () => {
-  console.log(`Logged in as ${bot.user.tag} (${bot.user.id})`);
-  
-  try {
-    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    
-    const existingCommands = await rest.get(Routes.applicationCommands(bot.user.id));
-    console.log(`Found ${existingCommands.length} existing commands`);
-    
-    if (existingCommands.length > 0) {
-      console.log('Deleting existing commands...');
-      for (const cmd of existingCommands) {
-        await rest.delete(`${Routes.applicationCommands(bot.user.id)}/${cmd.id}`);
-        await new Promise(r => setTimeout(r, 500));
-      }
-    }
-    
-    await new Promise(r => setTimeout(r, 1000));
-    
-    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
-    console.log('Commands registered successfully');
-  } catch (err) {
-    console.error('Command registration failed:', err.message);
-  }
+bot.once('ready', () => {
+  console.log(`Logged in as ${bot.user.tag}`);
+  console.log('Bot is ready - using message commands');
+  console.log('Commands: !clonekey, !revoke <key>, !access @user, !redeemkey <key>, !serverclone');
 });
 
-async function updatePanel(interaction, userId) {
+async function sendClonePanel(channel, userId) {
   const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(userId) || {};
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('set_token').setLabel('Set Token').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('copy_server').setLabel('Copy Server').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('clone_here').setLabel('Clone Here').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('start_clone').setLabel('Start').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('set_token_' + userId).setLabel('Set Token').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('copy_server_' + userId).setLabel('Copy Server').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('clone_here_' + userId).setLabel('Clone Here').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('start_clone_' + userId).setLabel('Start').setStyle(ButtonStyle.Success)
   );
   
   const embed = new EmbedBuilder()
@@ -79,99 +58,98 @@ async function updatePanel(interaction, userId) {
       { name: 'Target', value: session.target_name || session.target_guild || '❌ Not set', inline: true }
     );
   
-  if (interaction.message) {
-    return await interaction.update({ embeds: [embed], components: [row] });
-  }
+  return await channel.send({ embeds: [embed], components: [row] });
 }
 
-bot.on('interactionCreate', async (interaction) => {
-  try {
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'clonekey') {
-        if (interaction.user.id !== OWNER_ID) return await interaction.reply({ content: 'No', ephemeral: true });
-        const key = generateKey();
-        db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
-        return await interaction.reply({ content: `Key: \`${key}\``, ephemeral: true });
-      }
-      
-      if (interaction.commandName === 'revoke') {
-        if (interaction.user.id !== OWNER_ID) return await interaction.reply({ content: 'No', ephemeral: true });
-        const key = interaction.options.getString('key');
-        db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
-        return await interaction.reply({ content: 'Revoked', ephemeral: true });
-      }
-      
-      if (interaction.commandName === 'access') {
-        if (interaction.user.id !== OWNER_ID) return await interaction.reply({ content: 'No', ephemeral: true });
-        const user = interaction.options.getUser('user');
-        db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(user.id);
-        return await interaction.reply({ content: `Gave access to ${user.tag}`, ephemeral: true });
-      }
-      
-      if (interaction.commandName === 'redeemkey') {
-        const key = interaction.options.getString('key');
-        const keyData = db.prepare('SELECT * FROM keys WHERE key = ? AND active = 1').get(key);
-        if (!keyData) return await interaction.reply({ content: 'Invalid key', ephemeral: true });
-        
-        db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(interaction.user.id);
-        db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
-        if (keyData.uses <= 1) db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
-        
-        return await interaction.reply({ content: 'Key redeemed!', ephemeral: true });
-      }
-      
-      if (interaction.commandName === 'serverclone') {
-        const hasAccess = db.prepare('SELECT * FROM access WHERE user_id = ?').get(interaction.user.id);
-        if (!hasAccess) return await interaction.reply({ content: 'Redeem key first', ephemeral: true });
-        
-        const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
-        
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('set_token').setLabel('Set Token').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('copy_server').setLabel('Copy Server').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId('clone_here').setLabel('Clone Here').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId('start_clone').setLabel('Start').setStyle(ButtonStyle.Success)
-        );
-        
-        const embed = new EmbedBuilder()
-          .setTitle('Server Cloner')
-          .addFields(
-            { name: 'Token', value: session.token ? `✅ Set` : '❌ Not set', inline: false },
-            { name: 'Source', value: session.source_name || session.source_guild || '❌ Not set', inline: true },
-            { name: 'Target', value: session.target_name || session.target_guild || '❌ Not set', inline: true }
-          );
-        
-        return await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-      }
-    }
+bot.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (!message.content.startsWith(PREFIX)) return;
+  
+  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
+  
+  if (command === 'clonekey') {
+    if (message.author.id !== OWNER_ID) return message.reply('No');
+    const key = generateKey();
+    db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
+    return message.reply(`Key: \`${key}\``);
+  }
+  
+  if (command === 'revoke') {
+    if (message.author.id !== OWNER_ID) return message.reply('No');
+    const key = args[0];
+    if (!key) return message.reply('Provide key');
+    db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
+    return message.reply('Revoked');
+  }
+  
+  if (command === 'access') {
+    if (message.author.id !== OWNER_ID) return message.reply('No');
+    const user = message.mentions.users.first();
+    if (!user) return message.reply('Mention user');
+    db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(user.id);
+    return message.reply(`Gave access to ${user.tag}`);
+  }
+  
+  if (command === 'redeemkey') {
+    const key = args[0];
+    if (!key) return message.reply('Provide key');
+    const keyData = db.prepare('SELECT * FROM keys WHERE key = ? AND active = 1').get(key);
+    if (!keyData) return message.reply('Invalid key');
     
+    db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(message.author.id);
+    db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
+    if (keyData.uses <= 1) db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
+    
+    return message.reply('Key redeemed! Use !serverclone');
+  }
+  
+  if (command === 'serverclone') {
+    const hasAccess = db.prepare('SELECT * FROM access WHERE user_id = ?').get(message.author.id);
+    if (!hasAccess) return message.reply('Redeem key first with !redeemkey <key>');
+    
+    return await sendClonePanel(message.channel, message.author.id);
+  }
+});
+
+bot.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+  
+  const userId = interaction.user.id;
+  const customId = interaction.customId;
+  
+  if (!customId.endsWith('_' + userId) && !customId.includes('_modal_')) {
+    return interaction.reply({ content: 'Not your panel', ephemeral: true });
+  }
+  
+  try {
     if (interaction.isButton()) {
-      if (interaction.customId === 'set_token') {
-        const modal = new ModalBuilder().setCustomId('token_modal').setTitle('Set Token');
+      if (customId.startsWith('set_token_')) {
+        const modal = new ModalBuilder().setCustomId('token_modal_' + userId).setTitle('Set Token');
         modal.addComponents(new ActionRowBuilder().addComponents(
           new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)
         ));
         return await interaction.showModal(modal);
       }
       
-      if (interaction.customId === 'copy_server') {
-        const modal = new ModalBuilder().setCustomId('source_modal').setTitle('Source Server');
+      if (customId.startsWith('copy_server_')) {
+        const modal = new ModalBuilder().setCustomId('source_modal_' + userId).setTitle('Source Server');
         modal.addComponents(new ActionRowBuilder().addComponents(
           new TextInputBuilder().setCustomId('guild_id').setLabel('Server ID to Copy').setStyle(TextInputStyle.Short).setRequired(true)
         ));
         return await interaction.showModal(modal);
       }
       
-      if (interaction.customId === 'clone_here') {
-        const modal = new ModalBuilder().setCustomId('target_modal').setTitle('Target Server');
+      if (customId.startsWith('clone_here_')) {
+        const modal = new ModalBuilder().setCustomId('target_modal_' + userId).setTitle('Target Server');
         modal.addComponents(new ActionRowBuilder().addComponents(
           new TextInputBuilder().setCustomId('guild_id').setLabel('Server ID to Clone To').setStyle(TextInputStyle.Short).setRequired(true)
         ));
         return await interaction.showModal(modal);
       }
       
-      if (interaction.customId === 'start_clone') {
-        const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id);
+      if (customId.startsWith('start_clone_')) {
+        const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(userId);
         if (!session?.token || !session?.source_guild || !session?.target_guild) {
           return await interaction.reply({ content: 'Set all fields first', ephemeral: true });
         }
@@ -268,9 +246,9 @@ bot.on('interactionCreate', async (interaction) => {
           }
           
           selfClient.destroy();
-          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(interaction.user.id);
+          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
           
-          return await interaction.editReply({ content: '✅ Clone complete! Old content deleted, new server cloned.' });
+          return await interaction.editReply({ content: '✅ Clone complete!' });
         } catch (err) {
           return await interaction.editReply({ content: `Error: ${err.message}` });
         }
@@ -278,7 +256,7 @@ bot.on('interactionCreate', async (interaction) => {
     }
     
     if (interaction.isModalSubmit()) {
-      if (interaction.customId === 'token_modal') {
+      if (customId.startsWith('token_modal_')) {
         const token = interaction.fields.getTextInputValue('token');
         const selfClient = new SelfClient({ checkUpdate: false });
         selfClient.options.ws.properties = getSuperProperties();
@@ -288,23 +266,22 @@ bot.on('interactionCreate', async (interaction) => {
           const user = selfClient.user;
           selfClient.destroy();
           
-          const existing = db.prepare('SELECT source_guild, target_guild, source_name, target_name FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
+          const existing = db.prepare('SELECT source_guild, target_guild, source_name, target_name FROM sessions WHERE user_id = ?').get(userId) || {};
           
           db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(interaction.user.id, token, existing.source_guild || '', existing.target_guild || '', existing.source_name || '', existing.target_name || '');
+            .run(userId, token, existing.source_guild || '', existing.target_guild || '', existing.source_name || '', existing.target_name || '');
           
-          await interaction.reply({ content: `✅ Logged in as @${user.username}`, ephemeral: true });
-          try { await updatePanel(interaction, interaction.user.id); } catch (e) {}
+          return await interaction.reply({ content: `✅ Logged in as @${user.username}`, ephemeral: true });
         } catch (e) {
-          await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
+          return await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
         }
       }
       
-      if (interaction.customId === 'source_modal') {
+      if (customId.startsWith('source_modal_')) {
         const guildId = interaction.fields.getTextInputValue('guild_id');
-        const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(interaction.user.id);
+        const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(userId);
         
-        db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+        db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, userId);
         
         if (session?.token) {
           const selfClient = new SelfClient({ checkUpdate: false });
@@ -313,22 +290,21 @@ bot.on('interactionCreate', async (interaction) => {
             await selfClient.login(session.token);
             const guild = await selfClient.guilds.fetch(guildId);
             selfClient.destroy();
-            db.prepare('UPDATE sessions SET source_name = ? WHERE user_id = ?').run(guild.name, interaction.user.id);
-            await interaction.reply({ content: `✅ Source: ${guild.name}`, ephemeral: true });
+            db.prepare('UPDATE sessions SET source_name = ? WHERE user_id = ?').run(guild.name, userId);
+            return await interaction.reply({ content: `✅ Source: ${guild.name}`, ephemeral: true });
           } catch (e) {
-            await interaction.reply({ content: `✅ Source set`, ephemeral: true });
+            return await interaction.reply({ content: `✅ Source set`, ephemeral: true });
           }
         } else {
-          await interaction.reply({ content: `✅ Source set`, ephemeral: true });
+          return await interaction.reply({ content: `✅ Source set`, ephemeral: true });
         }
-        try { await updatePanel(interaction, interaction.user.id); } catch (e) {}
       }
       
-      if (interaction.customId === 'target_modal') {
+      if (customId.startsWith('target_modal_')) {
         const guildId = interaction.fields.getTextInputValue('guild_id');
-        const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(interaction.user.id);
+        const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(userId);
         
-        db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+        db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, userId);
         
         if (session?.token) {
           const selfClient = new SelfClient({ checkUpdate: false });
@@ -337,15 +313,14 @@ bot.on('interactionCreate', async (interaction) => {
             await selfClient.login(session.token);
             const guild = await selfClient.guilds.fetch(guildId);
             selfClient.destroy();
-            db.prepare('UPDATE sessions SET target_name = ? WHERE user_id = ?').run(guild.name, interaction.user.id);
-            await interaction.reply({ content: `✅ Target: ${guild.name}`, ephemeral: true });
+            db.prepare('UPDATE sessions SET target_name = ? WHERE user_id = ?').run(guild.name, userId);
+            return await interaction.reply({ content: `✅ Target: ${guild.name}`, ephemeral: true });
           } catch (e) {
-            await interaction.reply({ content: `✅ Target set`, ephemeral: true });
+            return await interaction.reply({ content: `✅ Target set`, ephemeral: true });
           }
         } else {
-          await interaction.reply({ content: `✅ Target set`, ephemeral: true });
+          return await interaction.reply({ content: `✅ Target set`, ephemeral: true });
         }
-        try { await updatePanel(interaction, interaction.user.id); } catch (e) {}
       }
     }
   } catch (err) {
