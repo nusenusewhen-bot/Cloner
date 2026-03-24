@@ -11,6 +11,7 @@ db.exec(`
 `);
 
 const OWNER_ID = '1422945082746601594';
+const CLIENT_ID = '1486132288369725590';
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 if (!BOT_TOKEN) {
@@ -27,20 +28,19 @@ function generateKey() {
 }
 
 const commands = [
-  new SlashCommandBuilder().setName('clonekey').setDescription('Generate clone key').setDefaultMemberPermissions(0).toJSON(),
-  new SlashCommandBuilder().setName('revoke').setDescription('Revoke a key').addStringOption(opt => opt.setName('key').setDescription('Key to revoke').setRequired(true)).setDefaultMemberPermissions(0).toJSON(),
-  new SlashCommandBuilder().setName('access').setDescription('Give unlimited access').addUserOption(opt => opt.setName('user').setDescription('User').setRequired(true)).setDefaultMemberPermissions(0).toJSON(),
-  new SlashCommandBuilder().setName('redeemkey').setDescription('Redeem a clone key').addStringOption(opt => opt.setName('key').setDescription('Your key').setRequired(true)).toJSON(),
-  new SlashCommandBuilder().setName('serverclone').setDescription('Open clone panel').toJSON()
+  new SlashCommandBuilder().setName('clonekey').setDescription('Generate clone key').setDefaultMemberPermissions(0),
+  new SlashCommandBuilder().setName('revoke').setDescription('Revoke a key').addStringOption(opt => opt.setName('key').setDescription('Key to revoke').setRequired(true)).setDefaultMemberPermissions(0),
+  new SlashCommandBuilder().setName('access').setDescription('Give unlimited access').addUserOption(opt => opt.setName('user').setDescription('User').setRequired(true)).setDefaultMemberPermissions(0),
+  new SlashCommandBuilder().setName('redeemkey').setDescription('Redeem a clone key').addStringOption(opt => opt.setName('key').setDescription('Your key').setRequired(true)),
+  new SlashCommandBuilder().setName('serverclone').setDescription('Open clone panel')
 ];
 
 bot.once('ready', async () => {
   console.log(`Logged in as ${bot.user.tag}`);
-  console.log(`Application ID: ${bot.user.id}`);
   
   try {
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands });
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands.map(c => c.toJSON()) });
     console.log('Commands registered globally');
   } catch (err) {
     console.error('Command registration failed:', err.message);
@@ -278,13 +278,23 @@ bot.on('interactionCreate', async (interaction) => {
           const user = selfClient.user;
           selfClient.destroy();
           
-          db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, COALESCE((SELECT source_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT source_name FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_name FROM sessions WHERE user_id = ?), ?))')
-            .run(interaction.user.id, token, interaction.user.id, '', interaction.user.id, '', interaction.user.id, '', interaction.user.id, '');
+          const existing = db.prepare('SELECT source_guild, target_guild, source_name, target_name FROM sessions WHERE user_id = ?').get(interaction.user.id);
+          
+          db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(
+              interaction.user.id, 
+              token, 
+              existing?.source_guild || '', 
+              existing?.target_guild || '',
+              existing?.source_name || '',
+              existing?.target_name || ''
+            );
           
           await interaction.reply({ content: `✅ Logged in as @${user.username} (${user.id})`, ephemeral: true });
           return await updatePanel(interaction, interaction.user.id);
         } catch (e) {
-          return await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
+          console.error('Token validation error:', e);
+          return await interaction.reply({ content: `❌ Invalid token: ${e.message}`, ephemeral: true });
         }
       }
       
