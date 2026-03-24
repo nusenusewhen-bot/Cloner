@@ -11,7 +11,6 @@ db.exec(`
 `);
 
 const OWNER_ID = '1422945082746601594';
-const GUILD_ID = process.env.GUILD_ID;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 if (!BOT_TOKEN) {
@@ -41,15 +40,23 @@ bot.once('ready', async () => {
   try {
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     
-    if (GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(bot.user.id, GUILD_ID), { body: commands.map(c => c.toJSON()) });
-      console.log(`Guild commands registered to ${GUILD_ID}`);
-    } else {
-      await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
-      console.log('Global commands registered');
+    const existingCommands = await rest.get(Routes.applicationCommands(bot.user.id));
+    console.log(`Found ${existingCommands.length} existing commands`);
+    
+    if (existingCommands.length > 0) {
+      console.log('Deleting existing commands...');
+      for (const cmd of existingCommands) {
+        await rest.delete(`${Routes.applicationCommands(bot.user.id)}/${cmd.id}`);
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
+    
+    await new Promise(r => setTimeout(r, 1000));
+    
+    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
+    console.log('Commands registered successfully');
   } catch (err) {
-    console.error('Command reg failed:', err.message);
+    console.error('Command registration failed:', err.message);
   }
 });
 
@@ -68,8 +75,8 @@ async function updatePanel(interaction, userId) {
     .setDescription('Configure your clone settings below')
     .addFields(
       { name: 'Token', value: session.token ? `✅ Set` : '❌ Not set', inline: false },
-      { name: 'Source', value: session.source_name ? `✅ ${session.source_name}` : (session.source_guild ? `✅ ${session.source_guild}` : '❌ Not set'), inline: true },
-      { name: 'Target', value: session.target_name ? `✅ ${session.target_name}` : (session.target_guild ? `✅ ${session.target_guild}` : '❌ Not set'), inline: true }
+      { name: 'Source', value: session.source_name || session.source_guild || '❌ Not set', inline: true },
+      { name: 'Target', value: session.target_name || session.target_guild || '❌ Not set', inline: true }
     );
   
   if (interaction.message) {
