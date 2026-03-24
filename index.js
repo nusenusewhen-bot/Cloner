@@ -35,7 +35,6 @@ function generateKey() {
 
 bot.once('ready', () => {
   console.log(`Logged in as ${bot.user.tag}`);
-  console.log('Bot is ready - using message commands');
   console.log('Commands: !clonekey, !revoke <key>, !access @user, !redeemkey <key>, !serverclone');
 });
 
@@ -119,7 +118,7 @@ bot.on('interactionCreate', async (interaction) => {
   const customId = interaction.customId;
   
   if (!customId.endsWith('_' + userId) && !customId.includes('_modal_')) {
-    return interaction.reply({ content: 'Not your panel', ephemeral: true });
+    return interaction.reply({ content: 'Not your panel', ephemeral: true }).catch(() => {});
   }
   
   try {
@@ -151,10 +150,10 @@ bot.on('interactionCreate', async (interaction) => {
       if (customId.startsWith('start_clone_')) {
         const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(userId);
         if (!session?.token || !session?.source_guild || !session?.target_guild) {
-          return await interaction.reply({ content: 'Set all fields first', ephemeral: true });
+          return await interaction.reply({ content: 'Set all fields first', ephemeral: true }).catch(() => {});
         }
         
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
         
         const selfClient = new SelfClient({ checkUpdate: false });
         selfClient.options.http.api = 'https://discord.com/api/v9';
@@ -166,7 +165,7 @@ bot.on('interactionCreate', async (interaction) => {
           const sourceGuild = await selfClient.guilds.fetch(session.source_guild);
           const targetGuild = await selfClient.guilds.fetch(session.target_guild);
           
-          await interaction.editReply({ content: '🔴 Deleting existing roles and channels...' });
+          await interaction.editReply({ content: '🔴 Deleting existing roles and channels...' }).catch(() => {});
           
           const existingRoles = targetGuild.roles.cache.filter(r => r.name !== '@everyone' && r.editable);
           for (const [, role] of existingRoles) {
@@ -178,7 +177,7 @@ bot.on('interactionCreate', async (interaction) => {
             try { await channel.delete(); await new Promise(r => setTimeout(r, 200)); } catch (e) {}
           }
           
-          await interaction.editReply({ content: '🟡 Cloning server...' });
+          await interaction.editReply({ content: '🟡 Cloning server...' }).catch(() => {});
           
           await targetGuild.setName(sourceGuild.name);
           if (sourceGuild.icon) await targetGuild.setIcon(sourceGuild.iconURL({ dynamic: true }));
@@ -248,9 +247,9 @@ bot.on('interactionCreate', async (interaction) => {
           selfClient.destroy();
           db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
           
-          return await interaction.editReply({ content: '✅ Clone complete!' });
+          return await interaction.editReply({ content: '✅ Clone complete!' }).catch(() => {});
         } catch (err) {
-          return await interaction.editReply({ content: `Error: ${err.message}` });
+          return await interaction.editReply({ content: `Error: ${err.message}` }).catch(() => {});
         }
       }
     }
@@ -271,9 +270,9 @@ bot.on('interactionCreate', async (interaction) => {
           db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, ?, ?, ?, ?)')
             .run(userId, token, existing.source_guild || '', existing.target_guild || '', existing.source_name || '', existing.target_name || '');
           
-          return await interaction.reply({ content: `✅ Logged in as @${user.username}`, ephemeral: true });
+          return await interaction.reply({ content: `✅ Logged in as @${user.username}`, ephemeral: true }).catch(() => {});
         } catch (e) {
-          return await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
+          return await interaction.reply({ content: '❌ Invalid token', ephemeral: true }).catch(() => {});
         }
       }
       
@@ -291,12 +290,12 @@ bot.on('interactionCreate', async (interaction) => {
             const guild = await selfClient.guilds.fetch(guildId);
             selfClient.destroy();
             db.prepare('UPDATE sessions SET source_name = ? WHERE user_id = ?').run(guild.name, userId);
-            return await interaction.reply({ content: `✅ Source: ${guild.name}`, ephemeral: true });
+            return await interaction.reply({ content: `✅ Source: ${guild.name}`, ephemeral: true }).catch(() => {});
           } catch (e) {
-            return await interaction.reply({ content: `✅ Source set`, ephemeral: true });
+            return await interaction.reply({ content: `✅ Source set`, ephemeral: true }).catch(() => {});
           }
         } else {
-          return await interaction.reply({ content: `✅ Source set`, ephemeral: true });
+          return await interaction.reply({ content: `✅ Source set`, ephemeral: true }).catch(() => {});
         }
       }
       
@@ -314,24 +313,17 @@ bot.on('interactionCreate', async (interaction) => {
             const guild = await selfClient.guilds.fetch(guildId);
             selfClient.destroy();
             db.prepare('UPDATE sessions SET target_name = ? WHERE user_id = ?').run(guild.name, userId);
-            return await interaction.reply({ content: `✅ Target: ${guild.name}`, ephemeral: true });
+            return await interaction.reply({ content: `✅ Target: ${guild.name}`, ephemeral: true }).catch(() => {});
           } catch (e) {
-            return await interaction.reply({ content: `✅ Target set`, ephemeral: true });
+            return await interaction.reply({ content: `✅ Target set`, ephemeral: true }).catch(() => {});
           }
         } else {
-          return await interaction.reply({ content: `✅ Target set`, ephemeral: true });
+          return await interaction.reply({ content: `✅ Target set`, ephemeral: true }).catch(() => {});
         }
       }
     }
   } catch (err) {
     console.error('Interaction error:', err);
-    try {
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: 'Error', ephemeral: true });
-      } else {
-        await interaction.reply({ content: 'Error', ephemeral: true });
-      }
-    } catch (e) {}
   }
 });
 
