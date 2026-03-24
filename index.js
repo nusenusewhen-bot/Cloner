@@ -7,7 +7,7 @@ const db = new Database('./clones.db');
 db.exec(`
   CREATE TABLE IF NOT EXISTS keys (key TEXT PRIMARY KEY, uses INTEGER DEFAULT 1, active INTEGER DEFAULT 1);
   CREATE TABLE IF NOT EXISTS access (user_id TEXT PRIMARY KEY);
-  CREATE TABLE IF NOT EXISTS sessions (user_id TEXT PRIMARY KEY, token TEXT, source_guild TEXT, target_guild TEXT);
+  CREATE TABLE IF NOT EXISTS sessions (user_id TEXT PRIMARY KEY, token TEXT, source_guild TEXT, target_guild TEXT, source_name TEXT, target_name TEXT);
 `);
 
 const OWNER_ID = '1422945082746601594';
@@ -27,23 +27,47 @@ function generateKey() {
 }
 
 const commands = [
-  new SlashCommandBuilder().setName('clonekey').setDescription('Generate clone key').setDefaultMemberPermissions(0),
-  new SlashCommandBuilder().setName('revoke').setDescription('Revoke a key').addStringOption(opt => opt.setName('key').setDescription('Key to revoke').setRequired(true)).setDefaultMemberPermissions(0),
-  new SlashCommandBuilder().setName('access').setDescription('Give unlimited access').addUserOption(opt => opt.setName('user').setDescription('User').setRequired(true)).setDefaultMemberPermissions(0),
-  new SlashCommandBuilder().setName('redeemkey').setDescription('Redeem a clone key').addStringOption(opt => opt.setName('key').setDescription('Your key').setRequired(true)),
-  new SlashCommandBuilder().setName('serverclone').setDescription('Open clone panel')
+  new SlashCommandBuilder().setName('clonekey').setDescription('Generate clone key').setDefaultMemberPermissions(0).toJSON(),
+  new SlashCommandBuilder().setName('revoke').setDescription('Revoke a key').addStringOption(opt => opt.setName('key').setDescription('Key to revoke').setRequired(true)).setDefaultMemberPermissions(0).toJSON(),
+  new SlashCommandBuilder().setName('access').setDescription('Give unlimited access').addUserOption(opt => opt.setName('user').setDescription('User').setRequired(true)).setDefaultMemberPermissions(0).toJSON(),
+  new SlashCommandBuilder().setName('redeemkey').setDescription('Redeem a clone key').addStringOption(opt => opt.setName('key').setDescription('Your key').setRequired(true)).toJSON(),
+  new SlashCommandBuilder().setName('serverclone').setDescription('Open clone panel').toJSON()
 ];
 
 bot.once('ready', async () => {
   console.log(`Logged in as ${bot.user.tag}`);
   try {
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
+    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands });
     console.log('Commands registered');
   } catch (err) {
-    console.error('Command registration failed:', err);
+    console.error('Command registration failed:', err.message);
   }
 });
+
+async function updatePanel(interaction, userId) {
+  const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(userId) || {};
+  
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('set_token').setLabel('Set Token').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('copy_server').setLabel('Copy Server').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('clone_here').setLabel('Clone Here').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('start_clone').setLabel('Start').setStyle(ButtonStyle.Success)
+  );
+  
+  const embed = new EmbedBuilder()
+    .setTitle('Server Cloner')
+    .setDescription('Configure your clone settings below')
+    .addFields(
+      { name: 'Token', value: session.token ? `✅ ${session.token.substring(0, 20)}...` : '❌ Not set', inline: false },
+      { name: 'Source', value: session.source_name ? `✅ ${session.source_name} (${session.source_guild})` : '❌ Not set', inline: true },
+      { name: 'Target', value: session.target_name ? `✅ ${session.target_name} (${session.target_guild})` : '❌ Not set', inline: true }
+    );
+  
+  if (interaction.message) {
+    return await interaction.update({ embeds: [embed], components: [row] });
+  }
+}
 
 bot.on('interactionCreate', async (interaction) => {
   try {
@@ -113,9 +137,9 @@ bot.on('interactionCreate', async (interaction) => {
           .setTitle('Server Cloner')
           .setDescription('Configure your clone settings below')
           .addFields(
-            { name: 'Token', value: session.token ? '✅ Set' : '❌ Not set', inline: true },
-            { name: 'Source', value: session.source_guild ? '✅ Set' : '❌ Not set', inline: true },
-            { name: 'Target', value: session.target_guild ? '✅ Set' : '❌ Not set', inline: true }
+            { name: 'Token', value: session.token ? `✅ ${session.token.substring(0, 20)}...` : '❌ Not set', inline: false },
+            { name: 'Source', value: session.source_name ? `✅ ${session.source_name} (${session.source_guild})` : '❌ Not set', inline: true },
+            { name: 'Target', value: session.target_name ? `✅ ${session.target_name} (${session.target_guild})` : '❌ Not set', inline: true }
           );
         
         return await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
@@ -252,10 +276,11 @@ bot.on('interactionCreate', async (interaction) => {
           const user = selfClient.user;
           selfClient.destroy();
           
-          db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild) VALUES (?, ?, COALESCE((SELECT source_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_guild FROM sessions WHERE user_id = ?), ?))')
-            .run(interaction.user.id, token, interaction.user.id, '', interaction.user.id, '');
+          db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, COALESCE((SELECT source_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT source_name FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_name FROM sessions WHERE user_id = ?), ?))')
+            .run(interaction.user.id, token, interaction.user.id, '', interaction.user.id, '', interaction.user.id, '', interaction.user.id, '');
           
-          return await interaction.reply({ content: `✅ Logged in as ${user.tag}`, ephemeral: true });
+          await interaction.reply({ content: `✅ Logged in as @${user.username} (${user.id})`, ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
         } catch (e) {
           return await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
         }
@@ -263,14 +288,58 @@ bot.on('interactionCreate', async (interaction) => {
       
       if (interaction.customId === 'source_modal') {
         const guildId = interaction.fields.getTextInputValue('guild_id');
-        db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-        return await interaction.reply({ content: '✅ Source server set', ephemeral: true });
+        const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(interaction.user.id);
+        
+        if (!session || !session.token) {
+          db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+          await interaction.reply({ content: '✅ Source server set (fetching name requires token)', ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
+        }
+        
+        const selfClient = new SelfClient({ checkUpdate: false });
+        selfClient.options.ws.properties = getSuperProperties();
+        
+        try {
+          await selfClient.login(session.token);
+          const guild = await selfClient.guilds.fetch(guildId);
+          selfClient.destroy();
+          
+          db.prepare('UPDATE sessions SET source_guild = ?, source_name = ? WHERE user_id = ?').run(guildId, guild.name, interaction.user.id);
+          await interaction.reply({ content: `✅ Source set: ${guild.name}`, ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
+        } catch (e) {
+          db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+          await interaction.reply({ content: `✅ Source server ID set (couldn't fetch name: ${e.message})`, ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
+        }
       }
       
       if (interaction.customId === 'target_modal') {
         const guildId = interaction.fields.getTextInputValue('guild_id');
-        db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-        return await interaction.reply({ content: '✅ Target server set', ephemeral: true });
+        const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(interaction.user.id);
+        
+        if (!session || !session.token) {
+          db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+          await interaction.reply({ content: '✅ Target server set (fetching name requires token)', ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
+        }
+        
+        const selfClient = new SelfClient({ checkUpdate: false });
+        selfClient.options.ws.properties = getSuperProperties();
+        
+        try {
+          await selfClient.login(session.token);
+          const guild = await selfClient.guilds.fetch(guildId);
+          selfClient.destroy();
+          
+          db.prepare('UPDATE sessions SET target_guild = ?, target_name = ? WHERE user_id = ?').run(guildId, guild.name, interaction.user.id);
+          await interaction.reply({ content: `✅ Target set: ${guild.name}`, ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
+        } catch (e) {
+          db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+          await interaction.reply({ content: `✅ Target server ID set (couldn't fetch name: ${e.message})`, ephemeral: true });
+          return await updatePanel(interaction, interaction.user.id);
+        }
       }
     }
   } catch (err) {
