@@ -1,5 +1,5 @@
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const Database = require('better-sqlite3');
 const { getSuperProperties } = require('./superprops');
 
@@ -13,6 +13,11 @@ db.exec(`
 const OWNER_ID = '1422945082746601594';
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
+if (!BOT_TOKEN) {
+  console.error('BOT_TOKEN not found in environment variables');
+  process.exit(1);
+}
+
 const bot = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
@@ -25,13 +30,15 @@ const commands = [
   new SlashCommandBuilder().setName('clonekey').setDescription('Generate clone key').setDefaultMemberPermissions(0),
   new SlashCommandBuilder().setName('revoke').setDescription('Revoke a key').addStringOption(opt => opt.setName('key').setDescription('Key to revoke').setRequired(true)).setDefaultMemberPermissions(0),
   new SlashCommandBuilder().setName('access').setDescription('Give unlimited access').addUserOption(opt => opt.setName('user').setDescription('User').setRequired(true)).setDefaultMemberPermissions(0),
+  new SlashCommandBuilder().setName('redeemkey').setDescription('Redeem a clone key').addStringOption(opt => opt.setName('key').setDescription('Your key').setRequired(true)),
   new SlashCommandBuilder().setName('serverclone').setDescription('Open clone panel')
 ];
 
 bot.once('ready', async () => {
+  console.log(`Logged in as ${bot.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
   await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
-  console.log('Bot ready');
+  console.log('Commands registered');
 });
 
 bot.on('interactionCreate', async (interaction) => {
@@ -57,13 +64,32 @@ bot.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: `Gave access to ${user.tag}`, ephemeral: true });
     }
     
+    if (interaction.commandName === 'redeemkey') {
+      const key = interaction.options.getString('key');
+      const keyData = db.prepare('SELECT * FROM keys WHERE key = ? AND active = 1').get(key);
+      
+      if (!keyData) {
+        return interaction.reply({ content: 'Invalid or used key', ephemeral: true });
+      }
+      
+      db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(interaction.user.id);
+      db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
+      
+      if (keyData.uses <= 1) {
+        db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
+      }
+      
+      return interaction.reply({ content: 'Key redeemed! You now have access to /serverclone', ephemeral: true });
+    }
+    
     if (interaction.commandName === 'serverclone') {
       const hasAccess = db.prepare('SELECT * FROM access WHERE user_id = ?').get(interaction.user.id);
-      const hasKey = db.prepare('SELECT * FROM keys WHERE active = 1 AND (uses > 0 OR ?)').get(hasAccess ? 1 : 0);
       
-      if (!hasAccess && !hasKey) {
-        return interaction.reply({ content: 'You need a clone key. Contact owner.', ephemeral: true });
+      if (!hasAccess) {
+        return interaction.reply({ content: 'You need to redeem a key first using /redeemkey', ephemeral: true });
       }
+      
+      const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
       
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('set_token').setLabel('Set Token').setStyle(ButtonStyle.Primary),
@@ -74,11 +100,11 @@ bot.on('interactionCreate', async (interaction) => {
       
       const embed = new EmbedBuilder()
         .setTitle('Server Cloner')
-        .setDescription('Click buttons to configure')
+        .setDescription('Configure your clone settings below')
         .addFields(
-          { name: 'Token', value: 'Not set', inline: true },
-          { name: 'Source', value: 'Not set', inline: true },
-          { name: 'Target', value: 'Not set', inline: true }
+          { name: 'Token', value: session.token ? '✅ Set' : '❌ Not set', inline: true },
+          { name: 'Source', value: session.source_guild ? '✅ Set' : '❌ Not set', inline: true },
+          { name: 'Target', value: session.target_guild ? '✅ Set' : '❌ Not set', inline: true }
         );
       
       return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
@@ -116,7 +142,7 @@ bot.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: 'Set all fields first', ephemeral: true });
       }
       
-      await interaction.reply({ content: 'Starting clone...', ephemeral: true });
+      await interaction.reply({ content: 'Starting clone... This may take a while.', ephemeral: true });
       
       const selfClient = new SelfClient({ checkUpdate: false });
       selfClient.options.http.api = 'https://discord.com/api/v9';
@@ -131,7 +157,9 @@ bot.on('interactionCreate', async (interaction) => {
         await targetGuild.setName(sourceGuild.name);
         if (sourceGuild.icon) await targetGuild.setIcon(sourceGuild.iconURL({ dynamic: true }));
         
-        const roles = [...sourceGuild.roles.cache.values()].sort((a, b) => b.position - a.position).filter(r => r.name !== '@everyone');
+        const roles = [...sourceGuild.roles.cache.values()]
+          .sort((a, b) => b.position - a.position)
+          .filter(r => r.name !== '@everyone');
         
         for (const role of roles) {
           try {
@@ -195,12 +223,7 @@ bot.on('interactionCreate', async (interaction) => {
         selfClient.destroy();
         db.prepare('DELETE FROM sessions WHERE user_id = ?').run(interaction.user.id);
         
-        const key = db.prepare('SELECT * FROM keys WHERE active = 1').get();
-        if (key && !db.prepare('SELECT * FROM access WHERE user_id = ?').get(interaction.user.id)) {
-          db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key.key);
-        }
-        
-        return interaction.followUp({ content: 'Clone complete', ephemeral: true });
+        return interaction.followUp({ content: '✅ Clone complete! Server copied successfully.', ephemeral: true });
       } catch (err) {
         return interaction.followUp({ content: `Error: ${err.message}`, ephemeral: true });
       }
@@ -221,24 +244,27 @@ bot.on('interactionCreate', async (interaction) => {
         db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild) VALUES (?, ?, COALESCE((SELECT source_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_guild FROM sessions WHERE user_id = ?), ?))')
           .run(interaction.user.id, token, interaction.user.id, '', interaction.user.id, '');
         
-        return interaction.reply({ content: `Logged in as ${user.tag}`, ephemeral: true });
+        return interaction.reply({ content: `✅ Logged in as ${user.tag}`, ephemeral: true });
       } catch (e) {
-        return interaction.reply({ content: 'Invalid token', ephemeral: true });
+        return interaction.reply({ content: '❌ Invalid token', ephemeral: true });
       }
     }
     
     if (interaction.customId === 'source_modal') {
       const guildId = interaction.fields.getTextInputValue('guild_id');
       db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-      return interaction.reply({ content: 'Source set', ephemeral: true });
+      return interaction.reply({ content: '✅ Source server set', ephemeral: true });
     }
     
     if (interaction.customId === 'target_modal') {
       const guildId = interaction.fields.getTextInputValue('guild_id');
       db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-      return interaction.reply({ content: 'Target set', ephemeral: true });
+      return interaction.reply({ content: '✅ Target server set', ephemeral: true });
     }
   }
 });
 
-bot.login(BOT_TOKEN);
+bot.login(BOT_TOKEN).catch(err => {
+  console.error('Failed to login:', err.message);
+  process.exit(1);
+});
