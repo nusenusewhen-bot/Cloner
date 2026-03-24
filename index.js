@@ -36,10 +36,12 @@ const commands = [
 
 bot.once('ready', async () => {
   console.log(`Logged in as ${bot.user.tag}`);
+  console.log(`Application ID: ${bot.user.id}`);
+  
   try {
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     await rest.put(Routes.applicationCommands(bot.user.id), { body: commands });
-    console.log('Commands registered');
+    console.log('Commands registered globally');
   } catch (err) {
     console.error('Command registration failed:', err.message);
   }
@@ -59,7 +61,7 @@ async function updatePanel(interaction, userId) {
     .setTitle('Server Cloner')
     .setDescription('Configure your clone settings below')
     .addFields(
-      { name: 'Token', value: session.token ? `✅ ${session.token.substring(0, 20)}...` : '❌ Not set', inline: false },
+      { name: 'Token', value: session.token ? `✅ @${session.token.substring(0, 20)}...` : '❌ Not set', inline: false },
       { name: 'Source', value: session.source_name ? `✅ ${session.source_name} (${session.source_guild})` : '❌ Not set', inline: true },
       { name: 'Target', value: session.target_name ? `✅ ${session.target_name} (${session.target_guild})` : '❌ Not set', inline: true }
     );
@@ -137,7 +139,7 @@ bot.on('interactionCreate', async (interaction) => {
           .setTitle('Server Cloner')
           .setDescription('Configure your clone settings below')
           .addFields(
-            { name: 'Token', value: session.token ? `✅ ${session.token.substring(0, 20)}...` : '❌ Not set', inline: false },
+            { name: 'Token', value: session.token ? `✅ @${session.token.substring(0, 20)}...` : '❌ Not set', inline: false },
             { name: 'Source', value: session.source_name ? `✅ ${session.source_name} (${session.source_guild})` : '❌ Not set', inline: true },
             { name: 'Target', value: session.target_name ? `✅ ${session.target_name} (${session.target_guild})` : '❌ Not set', inline: true }
           );
