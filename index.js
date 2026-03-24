@@ -11,10 +11,11 @@ db.exec(`
 `);
 
 const OWNER_ID = '1422945082746601594';
+const GUILD_ID = process.env.GUILD_ID;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN not found in environment variables');
+  console.error('BOT_TOKEN not found');
   process.exit(1);
 }
 
@@ -35,15 +36,20 @@ const commands = [
 ];
 
 bot.once('ready', async () => {
-  console.log(`Logged in as ${bot.user.tag}`);
-  console.log(`Bot ID: ${bot.user.id}`);
+  console.log(`Logged in as ${bot.user.tag} (${bot.user.id})`);
   
   try {
     const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
-    console.log('Commands registered successfully');
+    
+    if (GUILD_ID) {
+      await rest.put(Routes.applicationGuildCommands(bot.user.id, GUILD_ID), { body: commands.map(c => c.toJSON()) });
+      console.log(`Guild commands registered to ${GUILD_ID}`);
+    } else {
+      await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
+      console.log('Global commands registered');
+    }
   } catch (err) {
-    console.error('Command registration failed:', err.message);
+    console.error('Command reg failed:', err.message);
   }
 });
 
@@ -75,27 +81,21 @@ bot.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'clonekey') {
-        if (interaction.user.id !== OWNER_ID) {
-          return await interaction.reply({ content: 'No', ephemeral: true });
-        }
+        if (interaction.user.id !== OWNER_ID) return await interaction.reply({ content: 'No', ephemeral: true });
         const key = generateKey();
         db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
         return await interaction.reply({ content: `Key: \`${key}\``, ephemeral: true });
       }
       
       if (interaction.commandName === 'revoke') {
-        if (interaction.user.id !== OWNER_ID) {
-          return await interaction.reply({ content: 'No', ephemeral: true });
-        }
+        if (interaction.user.id !== OWNER_ID) return await interaction.reply({ content: 'No', ephemeral: true });
         const key = interaction.options.getString('key');
         db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
         return await interaction.reply({ content: 'Revoked', ephemeral: true });
       }
       
       if (interaction.commandName === 'access') {
-        if (interaction.user.id !== OWNER_ID) {
-          return await interaction.reply({ content: 'No', ephemeral: true });
-        }
+        if (interaction.user.id !== OWNER_ID) return await interaction.reply({ content: 'No', ephemeral: true });
         const user = interaction.options.getUser('user');
         db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(user.id);
         return await interaction.reply({ content: `Gave access to ${user.tag}`, ephemeral: true });
@@ -104,27 +104,18 @@ bot.on('interactionCreate', async (interaction) => {
       if (interaction.commandName === 'redeemkey') {
         const key = interaction.options.getString('key');
         const keyData = db.prepare('SELECT * FROM keys WHERE key = ? AND active = 1').get(key);
-        
-        if (!keyData) {
-          return await interaction.reply({ content: 'Invalid or used key', ephemeral: true });
-        }
+        if (!keyData) return await interaction.reply({ content: 'Invalid key', ephemeral: true });
         
         db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(interaction.user.id);
         db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
+        if (keyData.uses <= 1) db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
         
-        if (keyData.uses <= 1) {
-          db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
-        }
-        
-        return await interaction.reply({ content: 'Key redeemed! You now have access to /serverclone', ephemeral: true });
+        return await interaction.reply({ content: 'Key redeemed!', ephemeral: true });
       }
       
       if (interaction.commandName === 'serverclone') {
         const hasAccess = db.prepare('SELECT * FROM access WHERE user_id = ?').get(interaction.user.id);
-        
-        if (!hasAccess) {
-          return await interaction.reply({ content: 'You need to redeem a key first using /redeemkey', ephemeral: true });
-        }
+        if (!hasAccess) return await interaction.reply({ content: 'Redeem key first', ephemeral: true });
         
         const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
         
@@ -137,11 +128,10 @@ bot.on('interactionCreate', async (interaction) => {
         
         const embed = new EmbedBuilder()
           .setTitle('Server Cloner')
-          .setDescription('Configure your clone settings below')
           .addFields(
             { name: 'Token', value: session.token ? `✅ Set` : '❌ Not set', inline: false },
-            { name: 'Source', value: session.source_name ? `✅ ${session.source_name}` : (session.source_guild ? `✅ ${session.source_guild}` : '❌ Not set'), inline: true },
-            { name: 'Target', value: session.target_name ? `✅ ${session.target_name}` : (session.target_guild ? `✅ ${session.target_guild}` : '❌ Not set'), inline: true }
+            { name: 'Source', value: session.source_name || session.source_guild || '❌ Not set', inline: true },
+            { name: 'Target', value: session.target_name || session.target_guild || '❌ Not set', inline: true }
           );
         
         return await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
@@ -175,7 +165,7 @@ bot.on('interactionCreate', async (interaction) => {
       
       if (interaction.customId === 'start_clone') {
         const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id);
-        if (!session || !session.token || !session.source_guild || !session.target_guild) {
+        if (!session?.token || !session?.source_guild || !session?.target_guild) {
           return await interaction.reply({ content: 'Set all fields first', ephemeral: true });
         }
         
@@ -191,6 +181,20 @@ bot.on('interactionCreate', async (interaction) => {
           const sourceGuild = await selfClient.guilds.fetch(session.source_guild);
           const targetGuild = await selfClient.guilds.fetch(session.target_guild);
           
+          await interaction.editReply({ content: '🔴 Deleting existing roles and channels...' });
+          
+          const existingRoles = targetGuild.roles.cache.filter(r => r.name !== '@everyone' && r.editable);
+          for (const [, role] of existingRoles) {
+            try { await role.delete(); await new Promise(r => setTimeout(r, 200)); } catch (e) {}
+          }
+          
+          const existingChannels = [...targetGuild.channels.cache.values()];
+          for (const channel of existingChannels) {
+            try { await channel.delete(); await new Promise(r => setTimeout(r, 200)); } catch (e) {}
+          }
+          
+          await interaction.editReply({ content: '🟡 Cloning server...' });
+          
           await targetGuild.setName(sourceGuild.name);
           if (sourceGuild.icon) await targetGuild.setIcon(sourceGuild.iconURL({ dynamic: true }));
           
@@ -205,8 +209,7 @@ bot.on('interactionCreate', async (interaction) => {
                 color: role.color,
                 hoist: role.hoist,
                 permissions: role.permissions.bitfield,
-                mentionable: role.mentionable,
-                position: role.position
+                mentionable: role.mentionable
               });
               await new Promise(r => setTimeout(r, 350));
             } catch (e) {}
@@ -260,7 +263,7 @@ bot.on('interactionCreate', async (interaction) => {
           selfClient.destroy();
           db.prepare('DELETE FROM sessions WHERE user_id = ?').run(interaction.user.id);
           
-          return await interaction.editReply({ content: '✅ Clone complete! Server copied successfully.' });
+          return await interaction.editReply({ content: '✅ Clone complete! Old content deleted, new server cloned.' });
         } catch (err) {
           return await interaction.editReply({ content: `Error: ${err.message}` });
         }
@@ -278,27 +281,15 @@ bot.on('interactionCreate', async (interaction) => {
           const user = selfClient.user;
           selfClient.destroy();
           
-          const existing = db.prepare('SELECT source_guild, target_guild, source_name, target_name FROM sessions WHERE user_id = ?').get(interaction.user.id);
+          const existing = db.prepare('SELECT source_guild, target_guild, source_name, target_name FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
           
           db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(
-              interaction.user.id, 
-              token, 
-              existing?.source_guild || '', 
-              existing?.target_guild || '',
-              existing?.source_name || '',
-              existing?.target_name || ''
-            );
+            .run(interaction.user.id, token, existing.source_guild || '', existing.target_guild || '', existing.source_name || '', existing.target_name || '');
           
           await interaction.reply({ content: `✅ Logged in as @${user.username}`, ephemeral: true });
-          try {
-            return await updatePanel(interaction, interaction.user.id);
-          } catch (e) {
-            return;
-          }
+          try { await updatePanel(interaction, interaction.user.id); } catch (e) {}
         } catch (e) {
-          console.error('Token validation error:', e);
-          return await interaction.reply({ content: `❌ Invalid token`, ephemeral: true });
+          await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
         }
       }
       
@@ -306,89 +297,57 @@ bot.on('interactionCreate', async (interaction) => {
         const guildId = interaction.fields.getTextInputValue('guild_id');
         const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(interaction.user.id);
         
-        if (!session || !session.token) {
-          db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-          await interaction.reply({ content: '✅ Source server set', ephemeral: true });
-          try {
-            return await updatePanel(interaction, interaction.user.id);
-          } catch (e) {
-            return;
-          }
-        }
+        db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
         
-        const selfClient = new SelfClient({ checkUpdate: false });
-        selfClient.options.ws.properties = getSuperProperties();
-        
-        try {
-          await selfClient.login(session.token);
-          const guild = await selfClient.guilds.fetch(guildId);
-          selfClient.destroy();
-          
-          db.prepare('UPDATE sessions SET source_guild = ?, source_name = ? WHERE user_id = ?').run(guildId, guild.name, interaction.user.id);
-          await interaction.reply({ content: `✅ Source set: ${guild.name}`, ephemeral: true });
+        if (session?.token) {
+          const selfClient = new SelfClient({ checkUpdate: false });
+          selfClient.options.ws.properties = getSuperProperties();
           try {
-            return await updatePanel(interaction, interaction.user.id);
+            await selfClient.login(session.token);
+            const guild = await selfClient.guilds.fetch(guildId);
+            selfClient.destroy();
+            db.prepare('UPDATE sessions SET source_name = ? WHERE user_id = ?').run(guild.name, interaction.user.id);
+            await interaction.reply({ content: `✅ Source: ${guild.name}`, ephemeral: true });
           } catch (e) {
-            return;
+            await interaction.reply({ content: `✅ Source set`, ephemeral: true });
           }
-        } catch (e) {
-          db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+        } else {
           await interaction.reply({ content: `✅ Source set`, ephemeral: true });
-          try {
-            return await updatePanel(interaction, interaction.user.id);
-          } catch (e) {
-            return;
-          }
         }
+        try { await updatePanel(interaction, interaction.user.id); } catch (e) {}
       }
       
       if (interaction.customId === 'target_modal') {
         const guildId = interaction.fields.getTextInputValue('guild_id');
         const session = db.prepare('SELECT token FROM sessions WHERE user_id = ?').get(interaction.user.id);
         
-        if (!session || !session.token) {
-          db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-          await interaction.reply({ content: '✅ Target server set', ephemeral: true });
-          try {
-            return await updatePanel(interaction, interaction.user.id);
-          } catch (e) {
-            return;
-          }
-        }
+        db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
         
-        const selfClient = new SelfClient({ checkUpdate: false });
-        selfClient.options.ws.properties = getSuperProperties();
-        
-        try {
-          await selfClient.login(session.token);
-          const guild = await selfClient.guilds.fetch(guildId);
-          selfClient.destroy();
-          
-          db.prepare('UPDATE sessions SET target_guild = ?, target_name = ? WHERE user_id = ?').run(guildId, guild.name, interaction.user.id);
-          await interaction.reply({ content: `✅ Target set: ${guild.name}`, ephemeral: true });
+        if (session?.token) {
+          const selfClient = new SelfClient({ checkUpdate: false });
+          selfClient.options.ws.properties = getSuperProperties();
           try {
-            return await updatePanel(interaction, interaction.user.id);
+            await selfClient.login(session.token);
+            const guild = await selfClient.guilds.fetch(guildId);
+            selfClient.destroy();
+            db.prepare('UPDATE sessions SET target_name = ? WHERE user_id = ?').run(guild.name, interaction.user.id);
+            await interaction.reply({ content: `✅ Target: ${guild.name}`, ephemeral: true });
           } catch (e) {
-            return;
+            await interaction.reply({ content: `✅ Target set`, ephemeral: true });
           }
-        } catch (e) {
-          db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+        } else {
           await interaction.reply({ content: `✅ Target set`, ephemeral: true });
-          try {
-            return await updatePanel(interaction, interaction.user.id);
-          } catch (e) {
-            return;
-          }
         }
+        try { await updatePanel(interaction, interaction.user.id); } catch (e) {}
       }
     }
   } catch (err) {
     console.error('Interaction error:', err);
     try {
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: 'An error occurred', ephemeral: true });
+        await interaction.followUp({ content: 'Error', ephemeral: true });
       } else {
-        await interaction.reply({ content: 'An error occurred', ephemeral: true });
+        await interaction.reply({ content: 'Error', ephemeral: true });
       }
     } catch (e) {}
   }
