@@ -36,231 +36,252 @@ const commands = [
 
 bot.once('ready', async () => {
   console.log(`Logged in as ${bot.user.tag}`);
-  const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-  await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
-  console.log('Commands registered');
+  try {
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+    await rest.put(Routes.applicationCommands(bot.user.id), { body: commands.map(c => c.toJSON()) });
+    console.log('Commands registered');
+  } catch (err) {
+    console.error('Command registration failed:', err);
+  }
 });
 
 bot.on('interactionCreate', async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'clonekey') {
-      if (interaction.user.id !== OWNER_ID) return interaction.reply({ content: 'No', ephemeral: true });
-      const key = generateKey();
-      db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
-      return interaction.reply({ content: `Key: \`${key}\``, ephemeral: true });
-    }
-    
-    if (interaction.commandName === 'revoke') {
-      if (interaction.user.id !== OWNER_ID) return interaction.reply({ content: 'No', ephemeral: true });
-      const key = interaction.options.getString('key');
-      db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
-      return interaction.reply({ content: 'Revoked', ephemeral: true });
-    }
-    
-    if (interaction.commandName === 'access') {
-      if (interaction.user.id !== OWNER_ID) return interaction.reply({ content: 'No', ephemeral: true });
-      const user = interaction.options.getUser('user');
-      db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(user.id);
-      return interaction.reply({ content: `Gave access to ${user.tag}`, ephemeral: true });
-    }
-    
-    if (interaction.commandName === 'redeemkey') {
-      const key = interaction.options.getString('key');
-      const keyData = db.prepare('SELECT * FROM keys WHERE key = ? AND active = 1').get(key);
-      
-      if (!keyData) {
-        return interaction.reply({ content: 'Invalid or used key', ephemeral: true });
+  try {
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'clonekey') {
+        if (interaction.user.id !== OWNER_ID) {
+          return await interaction.reply({ content: 'No', ephemeral: true });
+        }
+        const key = generateKey();
+        db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
+        return await interaction.reply({ content: `Key: \`${key}\``, ephemeral: true });
       }
       
-      db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(interaction.user.id);
-      db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
-      
-      if (keyData.uses <= 1) {
+      if (interaction.commandName === 'revoke') {
+        if (interaction.user.id !== OWNER_ID) {
+          return await interaction.reply({ content: 'No', ephemeral: true });
+        }
+        const key = interaction.options.getString('key');
         db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
+        return await interaction.reply({ content: 'Revoked', ephemeral: true });
       }
       
-      return interaction.reply({ content: 'Key redeemed! You now have access to /serverclone', ephemeral: true });
-    }
-    
-    if (interaction.commandName === 'serverclone') {
-      const hasAccess = db.prepare('SELECT * FROM access WHERE user_id = ?').get(interaction.user.id);
-      
-      if (!hasAccess) {
-        return interaction.reply({ content: 'You need to redeem a key first using /redeemkey', ephemeral: true });
+      if (interaction.commandName === 'access') {
+        if (interaction.user.id !== OWNER_ID) {
+          return await interaction.reply({ content: 'No', ephemeral: true });
+        }
+        const user = interaction.options.getUser('user');
+        db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(user.id);
+        return await interaction.reply({ content: `Gave access to ${user.tag}`, ephemeral: true });
       }
       
-      const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
+      if (interaction.commandName === 'redeemkey') {
+        const key = interaction.options.getString('key');
+        const keyData = db.prepare('SELECT * FROM keys WHERE key = ? AND active = 1').get(key);
+        
+        if (!keyData) {
+          return await interaction.reply({ content: 'Invalid or used key', ephemeral: true });
+        }
+        
+        db.prepare('INSERT OR REPLACE INTO access (user_id) VALUES (?)').run(interaction.user.id);
+        db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
+        
+        if (keyData.uses <= 1) {
+          db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
+        }
+        
+        return await interaction.reply({ content: 'Key redeemed! You now have access to /serverclone', ephemeral: true });
+      }
       
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('set_token').setLabel('Set Token').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('copy_server').setLabel('Copy Server').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('clone_here').setLabel('Clone Here').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('start_clone').setLabel('Start').setStyle(ButtonStyle.Success)
-      );
-      
-      const embed = new EmbedBuilder()
-        .setTitle('Server Cloner')
-        .setDescription('Configure your clone settings below')
-        .addFields(
-          { name: 'Token', value: session.token ? '✅ Set' : '❌ Not set', inline: true },
-          { name: 'Source', value: session.source_guild ? '✅ Set' : '❌ Not set', inline: true },
-          { name: 'Target', value: session.target_guild ? '✅ Set' : '❌ Not set', inline: true }
+      if (interaction.commandName === 'serverclone') {
+        const hasAccess = db.prepare('SELECT * FROM access WHERE user_id = ?').get(interaction.user.id);
+        
+        if (!hasAccess) {
+          return await interaction.reply({ content: 'You need to redeem a key first using /redeemkey', ephemeral: true });
+        }
+        
+        const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id) || {};
+        
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('set_token').setLabel('Set Token').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('copy_server').setLabel('Copy Server').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('clone_here').setLabel('Clone Here').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('start_clone').setLabel('Start').setStyle(ButtonStyle.Success)
         );
-      
-      return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-    }
-  }
-  
-  if (interaction.isButton()) {
-    if (interaction.customId === 'set_token') {
-      const modal = new ModalBuilder().setCustomId('token_modal').setTitle('Set Token');
-      modal.addComponents(new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)
-      ));
-      return interaction.showModal(modal);
-    }
-    
-    if (interaction.customId === 'copy_server') {
-      const modal = new ModalBuilder().setCustomId('source_modal').setTitle('Source Server');
-      modal.addComponents(new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('guild_id').setLabel('Server ID to Copy').setStyle(TextInputStyle.Short).setRequired(true)
-      ));
-      return interaction.showModal(modal);
+        
+        const embed = new EmbedBuilder()
+          .setTitle('Server Cloner')
+          .setDescription('Configure your clone settings below')
+          .addFields(
+            { name: 'Token', value: session.token ? '✅ Set' : '❌ Not set', inline: true },
+            { name: 'Source', value: session.source_guild ? '✅ Set' : '❌ Not set', inline: true },
+            { name: 'Target', value: session.target_guild ? '✅ Set' : '❌ Not set', inline: true }
+          );
+        
+        return await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+      }
     }
     
-    if (interaction.customId === 'clone_here') {
-      const modal = new ModalBuilder().setCustomId('target_modal').setTitle('Target Server');
-      modal.addComponents(new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('guild_id').setLabel('Server ID to Clone To').setStyle(TextInputStyle.Short).setRequired(true)
-      ));
-      return interaction.showModal(modal);
-    }
-    
-    if (interaction.customId === 'start_clone') {
-      const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id);
-      if (!session || !session.token || !session.source_guild || !session.target_guild) {
-        return interaction.reply({ content: 'Set all fields first', ephemeral: true });
+    if (interaction.isButton()) {
+      if (interaction.customId === 'set_token') {
+        const modal = new ModalBuilder().setCustomId('token_modal').setTitle('Set Token');
+        modal.addComponents(new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)
+        ));
+        return await interaction.showModal(modal);
       }
       
-      await interaction.reply({ content: 'Starting clone... This may take a while.', ephemeral: true });
+      if (interaction.customId === 'copy_server') {
+        const modal = new ModalBuilder().setCustomId('source_modal').setTitle('Source Server');
+        modal.addComponents(new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('guild_id').setLabel('Server ID to Copy').setStyle(TextInputStyle.Short).setRequired(true)
+        ));
+        return await interaction.showModal(modal);
+      }
       
-      const selfClient = new SelfClient({ checkUpdate: false });
-      selfClient.options.http.api = 'https://discord.com/api/v9';
-      selfClient.options.ws.properties = getSuperProperties();
+      if (interaction.customId === 'clone_here') {
+        const modal = new ModalBuilder().setCustomId('target_modal').setTitle('Target Server');
+        modal.addComponents(new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('guild_id').setLabel('Server ID to Clone To').setStyle(TextInputStyle.Short).setRequired(true)
+        ));
+        return await interaction.showModal(modal);
+      }
       
-      try {
-        await selfClient.login(session.token);
-        
-        const sourceGuild = await selfClient.guilds.fetch(session.source_guild);
-        const targetGuild = await selfClient.guilds.fetch(session.target_guild);
-        
-        await targetGuild.setName(sourceGuild.name);
-        if (sourceGuild.icon) await targetGuild.setIcon(sourceGuild.iconURL({ dynamic: true }));
-        
-        const roles = [...sourceGuild.roles.cache.values()]
-          .sort((a, b) => b.position - a.position)
-          .filter(r => r.name !== '@everyone');
-        
-        for (const role of roles) {
-          try {
-            await targetGuild.roles.create({
-              name: role.name,
-              color: role.color,
-              hoist: role.hoist,
-              permissions: role.permissions.bitfield,
-              mentionable: role.mentionable,
-              position: role.position
-            });
-            await new Promise(r => setTimeout(r, 350));
-          } catch (e) {}
+      if (interaction.customId === 'start_clone') {
+        const session = db.prepare('SELECT * FROM sessions WHERE user_id = ?').get(interaction.user.id);
+        if (!session || !session.token || !session.source_guild || !session.target_guild) {
+          return await interaction.reply({ content: 'Set all fields first', ephemeral: true });
         }
         
-        const channels = [...sourceGuild.channels.cache.values()].sort((a, b) => a.position - b.position);
-        const categoryMap = new Map();
+        await interaction.deferReply({ ephemeral: true });
         
-        for (const channel of channels) {
-          if (channel.type === 4) {
-            try {
-              const newCat = await targetGuild.channels.create({
-                name: channel.name,
-                type: channel.type,
-                position: channel.position,
-                permissionOverwrites: channel.permissionOverwrites.cache.map(o => ({
-                  id: o.id,
-                  allow: o.allow.bitfield,
-                  deny: o.deny.bitfield
-                }))
-              });
-              categoryMap.set(channel.id, newCat.id);
-              await new Promise(r => setTimeout(r, 350));
-            } catch (e) {}
-          }
-        }
+        const selfClient = new SelfClient({ checkUpdate: false });
+        selfClient.options.http.api = 'https://discord.com/api/v9';
+        selfClient.options.ws.properties = getSuperProperties();
         
-        for (const channel of channels) {
-          if (channel.type !== 4) {
+        try {
+          await selfClient.login(session.token);
+          
+          const sourceGuild = await selfClient.guilds.fetch(session.source_guild);
+          const targetGuild = await selfClient.guilds.fetch(session.target_guild);
+          
+          await targetGuild.setName(sourceGuild.name);
+          if (sourceGuild.icon) await targetGuild.setIcon(sourceGuild.iconURL({ dynamic: true }));
+          
+          const roles = [...sourceGuild.roles.cache.values()]
+            .sort((a, b) => b.position - a.position)
+            .filter(r => r.name !== '@everyone');
+          
+          for (const role of roles) {
             try {
-              await targetGuild.channels.create({
-                name: channel.name,
-                type: channel.type,
-                parent: channel.parentId ? categoryMap.get(channel.parentId) : null,
-                position: channel.position,
-                topic: channel.topic || undefined,
-                nsfw: channel.nsfw,
-                bitrate: channel.bitrate,
-                userLimit: channel.userLimit,
-                permissionOverwrites: channel.permissionOverwrites.cache.map(o => ({
-                  id: o.id,
-                  allow: o.allow.bitfield,
-                  deny: o.deny.bitfield
-                }))
+              await targetGuild.roles.create({
+                name: role.name,
+                color: role.color,
+                hoist: role.hoist,
+                permissions: role.permissions.bitfield,
+                mentionable: role.mentionable,
+                position: role.position
               });
               await new Promise(r => setTimeout(r, 350));
             } catch (e) {}
           }
+          
+          const channels = [...sourceGuild.channels.cache.values()].sort((a, b) => a.position - b.position);
+          const categoryMap = new Map();
+          
+          for (const channel of channels) {
+            if (channel.type === 4) {
+              try {
+                const newCat = await targetGuild.channels.create({
+                  name: channel.name,
+                  type: channel.type,
+                  position: channel.position,
+                  permissionOverwrites: channel.permissionOverwrites.cache.map(o => ({
+                    id: o.id,
+                    allow: o.allow.bitfield,
+                    deny: o.deny.bitfield
+                  }))
+                });
+                categoryMap.set(channel.id, newCat.id);
+                await new Promise(r => setTimeout(r, 350));
+              } catch (e) {}
+            }
+          }
+          
+          for (const channel of channels) {
+            if (channel.type !== 4) {
+              try {
+                await targetGuild.channels.create({
+                  name: channel.name,
+                  type: channel.type,
+                  parent: channel.parentId ? categoryMap.get(channel.parentId) : null,
+                  position: channel.position,
+                  topic: channel.topic || undefined,
+                  nsfw: channel.nsfw,
+                  bitrate: channel.bitrate,
+                  userLimit: channel.userLimit,
+                  permissionOverwrites: channel.permissionOverwrites.cache.map(o => ({
+                    id: o.id,
+                    allow: o.allow.bitfield,
+                    deny: o.deny.bitfield
+                  }))
+                });
+                await new Promise(r => setTimeout(r, 350));
+              } catch (e) {}
+            }
+          }
+          
+          selfClient.destroy();
+          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(interaction.user.id);
+          
+          return await interaction.editReply({ content: '✅ Clone complete! Server copied successfully.' });
+        } catch (err) {
+          return await interaction.editReply({ content: `Error: ${err.message}` });
         }
-        
-        selfClient.destroy();
-        db.prepare('DELETE FROM sessions WHERE user_id = ?').run(interaction.user.id);
-        
-        return interaction.followUp({ content: '✅ Clone complete! Server copied successfully.', ephemeral: true });
-      } catch (err) {
-        return interaction.followUp({ content: `Error: ${err.message}`, ephemeral: true });
       }
     }
-  }
-  
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId === 'token_modal') {
-      const token = interaction.fields.getTextInputValue('token');
-      const selfClient = new SelfClient({ checkUpdate: false });
-      selfClient.options.ws.properties = getSuperProperties();
+    
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId === 'token_modal') {
+        const token = interaction.fields.getTextInputValue('token');
+        const selfClient = new SelfClient({ checkUpdate: false });
+        selfClient.options.ws.properties = getSuperProperties();
+        
+        try {
+          await selfClient.login(token);
+          const user = selfClient.user;
+          selfClient.destroy();
+          
+          db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild) VALUES (?, ?, COALESCE((SELECT source_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_guild FROM sessions WHERE user_id = ?), ?))')
+            .run(interaction.user.id, token, interaction.user.id, '', interaction.user.id, '');
+          
+          return await interaction.reply({ content: `✅ Logged in as ${user.tag}`, ephemeral: true });
+        } catch (e) {
+          return await interaction.reply({ content: '❌ Invalid token', ephemeral: true });
+        }
+      }
       
-      try {
-        await selfClient.login(token);
-        const user = selfClient.user;
-        selfClient.destroy();
-        
-        db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild) VALUES (?, ?, COALESCE((SELECT source_guild FROM sessions WHERE user_id = ?), ?), COALESCE((SELECT target_guild FROM sessions WHERE user_id = ?), ?))')
-          .run(interaction.user.id, token, interaction.user.id, '', interaction.user.id, '');
-        
-        return interaction.reply({ content: `✅ Logged in as ${user.tag}`, ephemeral: true });
-      } catch (e) {
-        return interaction.reply({ content: '❌ Invalid token', ephemeral: true });
+      if (interaction.customId === 'source_modal') {
+        const guildId = interaction.fields.getTextInputValue('guild_id');
+        db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+        return await interaction.reply({ content: '✅ Source server set', ephemeral: true });
+      }
+      
+      if (interaction.customId === 'target_modal') {
+        const guildId = interaction.fields.getTextInputValue('guild_id');
+        db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
+        return await interaction.reply({ content: '✅ Target server set', ephemeral: true });
       }
     }
-    
-    if (interaction.customId === 'source_modal') {
-      const guildId = interaction.fields.getTextInputValue('guild_id');
-      db.prepare('UPDATE sessions SET source_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-      return interaction.reply({ content: '✅ Source server set', ephemeral: true });
-    }
-    
-    if (interaction.customId === 'target_modal') {
-      const guildId = interaction.fields.getTextInputValue('guild_id');
-      db.prepare('UPDATE sessions SET target_guild = ? WHERE user_id = ?').run(guildId, interaction.user.id);
-      return interaction.reply({ content: '✅ Target server set', ephemeral: true });
-    }
+  } catch (err) {
+    console.error('Interaction error:', err);
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: 'An error occurred', ephemeral: true });
+      } else {
+        await interaction.reply({ content: 'An error occurred', ephemeral: true });
+      }
+    } catch (e) {}
   }
 });
 
