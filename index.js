@@ -25,11 +25,18 @@ app.get('/api/sessions', (req, res) => {
 
 function addLog(sessionId, message) {
   const session = db.prepare('SELECT logs FROM sessions WHERE id = ?').get(sessionId);
-  const logs = JSON.parse(session.logs || '[]');
+  const logs = JSON.parse(session?.logs || '[]');
   logs.unshift(`[${new Date().toLocaleTimeString()}] ${message}`);
   db.prepare('UPDATE sessions SET logs = ? WHERE id = ?').run(JSON.stringify(logs.slice(0, 100)), sessionId);
   broadcast({ type: 'log', id: sessionId, message });
-  return logs;
+}
+
+function broadcast(data) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
 }
 
 app.post('/api/clone', async (req, res) => {
@@ -50,32 +57,33 @@ app.post('/api/clone', async (req, res) => {
   selfClient.options.ws.properties = getSuperProperties();
   
   try {
-    addLog(sessionId, '🔑 Logging in with token...');
+    addLog(sessionId, '🔑 Logging in...');
     await selfClient.login(token);
     addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
     
-    addLog(sessionId, '📡 Fetching source guild...');
-    const source = await selfClient.guilds.fetch(sourceGuild);
-    addLog(sessionId, `✅ Source: ${source.name} (${source.id})`);
+    addLog(sessionId, '📡 Fetching guilds...');
+    const source = await selfClient.guilds.fetch(sourceGuild, { force: true });
+    const target = await selfClient.guilds.fetch(targetGuild, { force: true });
     
-    addLog(sessionId, '📡 Fetching target guild...');
-    const target = await selfClient.guilds.fetch(targetGuild);
-    addLog(sessionId, `✅ Target: ${target.name} (${target.id})`);
+    addLog(sessionId, `✅ Source: ${source.name}`);
+    addLog(sessionId, `✅ Target: ${target.name}`);
     
     db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
       .run(source.name, target.name, 'deleting', sessionId);
-    broadcast({ type: 'status', id: sessionId, status: 'deleting' });
     
-    const existingRoles = target.roles.cache.filter(r => r.name !== '@everyone' && r.editable);
-    addLog(sessionId, `🗑️ Deleting ${existingRoles.size} roles...`);
+    await target.channels.fetch({ force: true });
+    await target.roles.fetch({ force: true });
     
-    for (const [, role] of existingRoles) {
+    const existingRoles = [...target.roles.cache.values()].filter(r => r.name !== '@everyone' && r.editable);
+    addLog(sessionId, `🗑️ Deleting ${existingRoles.length} roles...`);
+    
+    for (const role of existingRoles) {
       try { 
         await role.delete(); 
         addLog(sessionId, `❌ Role deleted: ${role.name}`);
-        await new Promise(r => setTimeout(r, 200)); 
+        await new Promise(r => setTimeout(r, 300)); 
       } catch (e) {
-        addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${e.message}`);
+        addLog(sessionId, `⚠️ Role ${role.name}: ${e.message}`);
       }
     }
     
@@ -86,20 +94,26 @@ app.post('/api/clone', async (req, res) => {
       try { 
         await channel.delete(); 
         addLog(sessionId, `❌ Channel deleted: #${channel.name}`);
-        await new Promise(r => setTimeout(r, 200)); 
+        await new Promise(r => setTimeout(r, 300)); 
       } catch (e) {
-        addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${e.message}`);
+        addLog(sessionId, `⚠️ Channel #${channel.name}: ${e.message}`);
       }
     }
+    
+    await new Promise(r => setTimeout(r, 1000));
+    addLog(sessionId, '🔄 Refreshing cache...');
+    const freshTarget = await selfClient.guilds.fetch(targetGuild, { force: true });
+    await freshTarget.channels.fetch({ force: true });
     
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('cloning', sessionId);
     broadcast({ type: 'status', id: sessionId, status: 'cloning' });
     
-    addLog(sessionId, `📝 Setting server name to: ${source.name}`);
-    await target.setName(source.name);
+    addLog(sessionId, `📝 Setting name: ${source.name}`);
+    await freshTarget.setName(source.name);
+    
     if (source.icon) {
-      addLog(sessionId, '🖼️ Setting server icon...');
-      await target.setIcon(source.iconURL({ dynamic: true }));
+      addLog(sessionId, '🖼️ Setting icon...');
+      await freshTarget.setIcon(source.iconURL({ dynamic: true }));
     }
     
     const roles = [...source.roles.cache.values()]
@@ -110,99 +124,92 @@ app.post('/api/clone', async (req, res) => {
     
     for (const role of roles) {
       try {
-        const newRole = await target.roles.create({
+        const newRole = await freshTarget.roles.create({
           name: role.name,
           color: role.color,
           hoist: role.hoist,
           permissions: role.permissions.bitfield,
           mentionable: role.mentionable
         });
-        addLog(sessionId, `✅ Role created: ${newRole.name}`);
-        await new Promise(r => setTimeout(r, 350));
+        addLog(sessionId, `✅ Role: ${newRole.name}`);
+        await new Promise(r => setTimeout(r, 400));
       } catch (e) {
-        addLog(sessionId, `⚠️ Failed to create role ${role.name}: ${e.message}`);
+        addLog(sessionId, `⚠️ Role ${role.name}: ${e.message}`);
       }
     }
     
+    await source.channels.fetch({ force: true });
     const channels = [...source.channels.cache.values()].sort((a, b) => a.position - b.position);
-    const categoryMap = new Map();
     
+    const categoryMap = new Map();
     const categories = channels.filter(c => c.type === 4);
+    
     addLog(sessionId, `📁 Creating ${categories.length} categories...`);
     
-    for (const channel of categories) {
+    for (const cat of categories) {
       try {
-        const newCat = await target.channels.create({
-          name: channel.name,
-          type: channel.type,
-          position: channel.position,
-          permissionOverwrites: channel.permissionOverwrites.cache.map(o => ({
+        const newCat = await freshTarget.channels.create({
+          name: cat.name,
+          type: 4,
+          position: cat.position,
+          permissionOverwrites: cat.permissionOverwrites.cache.map(o => ({
             id: o.id,
-            allow: o.allow.bitfield,
-            deny: o.deny.bitfield
+            allow: o.allow.bitfield.toString(),
+            deny: o.deny.bitfield.toString()
           }))
         });
-        categoryMap.set(channel.id, newCat.id);
-        addLog(sessionId, `✅ Category created: ${newCat.name}`);
-        await new Promise(r => setTimeout(r, 350));
+        categoryMap.set(cat.id, newCat.id);
+        addLog(sessionId, `✅ Category: ${newCat.name}`);
+        await new Promise(r => setTimeout(r, 400));
       } catch (e) {
-        addLog(sessionId, `⚠️ Failed to create category ${channel.name}: ${e.message}`);
+        addLog(sessionId, `⚠️ Category ${cat.name}: ${e.message}`);
       }
     }
     
     const otherChannels = channels.filter(c => c.type !== 4);
     addLog(sessionId, `📋 Creating ${otherChannels.length} channels...`);
     
-    for (const channel of otherChannels) {
+    for (const ch of otherChannels) {
       try {
-        const newChannel = await target.channels.create({
-          name: channel.name,
-          type: channel.type,
-          parent: channel.parentId ? categoryMap.get(channel.parentId) : null,
-          position: channel.position,
-          topic: channel.topic || undefined,
-          nsfw: channel.nsfw,
-          bitrate: channel.bitrate,
-          userLimit: channel.userLimit,
-          permissionOverwrites: channel.permissionOverwrites.cache.map(o => ({
+        const parentId = ch.parentId ? categoryMap.get(ch.parentId) : null;
+        
+        const newCh = await freshTarget.channels.create({
+          name: ch.name,
+          type: ch.type,
+          position: ch.position,
+          topic: ch.topic || undefined,
+          nsfw: ch.nsfw || undefined,
+          bitrate: ch.bitrate || undefined,
+          userLimit: ch.userLimit || undefined,
+          parent: parentId,
+          permissionOverwrites: ch.permissionOverwrites.cache.map(o => ({
             id: o.id,
-            allow: o.allow.bitfield,
-            deny: o.deny.bitfield
+            allow: o.allow.bitfield.toString(),
+            deny: o.deny.bitfield.toString()
           }))
         });
-        const typeName = channel.type === 0 ? 'text' : channel.type === 2 ? 'voice' : 'channel';
-        addLog(sessionId, `✅ ${typeName} created: #${newChannel.name}`);
-        await new Promise(r => setTimeout(r, 350));
+        
+        const icon = ch.type === 0 ? '💬' : ch.type === 2 ? '🔊' : ch.type === 5 ? '📢' : '📝';
+        addLog(sessionId, `${icon} #${newCh.name}`);
+        await new Promise(r => setTimeout(r, 400));
       } catch (e) {
-        addLog(sessionId, `⚠️ Failed to create channel ${channel.name}: ${e.message}`);
+        addLog(sessionId, `⚠️ #${ch.name}: ${e.message}`);
       }
     }
     
     selfClient.destroy();
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
-    addLog(sessionId, '🎉 Clone completed successfully!');
+    addLog(sessionId, '🎉 Complete!');
     broadcast({ type: 'complete', id: sessionId });
   } catch (err) {
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('error', sessionId);
     addLog(sessionId, `💥 Error: ${err.message}`);
     broadcast({ type: 'error', id: sessionId, message: err.message });
+    selfClient.destroy();
   }
 });
 
-const clients = new Set();
-
-function broadcast(data) {
-  clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
-}
-
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  ws.on('close', () => clients.delete(ws));
-});
+wss.on('connection', (ws) => {});
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
