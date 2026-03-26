@@ -24,6 +24,7 @@ app.get('/api/sessions', (req, res) => {
 });
 
 function addLog(sessionId, message) {
+  console.log(`[${sessionId}] ${message}`);
   const session = db.prepare('SELECT logs FROM sessions WHERE id = ?').get(sessionId);
   const logs = JSON.parse(session?.logs || '[]');
   logs.unshift(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -56,20 +57,42 @@ app.post('/api/clone', async (req, res) => {
   selfClient.options.http.api = 'https://discord.com/api/v9';
   selfClient.options.ws.properties = getSuperProperties();
   
+  selfClient.on('error', (err) => {
+    addLog(sessionId, `💥 Client error: ${err.message}`);
+  });
+  
+  selfClient.on('disconnect', () => {
+    addLog(sessionId, '⚠️ Client disconnected');
+  });
+  
+  selfClient.on('debug', (msg) => {
+    console.log(`[DEBUG ${sessionId}] ${msg}`);
+  });
+  
   try {
     addLog(sessionId, '🔑 Logging in...');
-    await selfClient.login(token);
-    addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
+    addLog(sessionId, '⏱️ Timeout set to 15 seconds');
     
-    addLog(sessionId, '📡 Fetching guilds...');
+    const loginPromise = selfClient.login(token);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Login timeout - check token validity')), 15000);
+    });
+    
+    await Promise.race([loginPromise, timeoutPromise]);
+    
+    addLog(sessionId, `✅ Logged in as ${selfClient.user.tag} (${selfClient.user.id})`);
+    addLog(sessionId, '📡 Fetching source guild...');
+    
     const source = await selfClient.guilds.fetch(sourceGuild, { force: true });
-    const target = await selfClient.guilds.fetch(targetGuild, { force: true });
+    addLog(sessionId, `✅ Source: ${source.name} (${source.id})`);
     
-    addLog(sessionId, `✅ Source: ${source.name}`);
-    addLog(sessionId, `✅ Target: ${target.name}`);
+    addLog(sessionId, '📡 Fetching target guild...');
+    const target = await selfClient.guilds.fetch(targetGuild, { force: true });
+    addLog(sessionId, `✅ Target: ${target.name} (${target.id})`);
     
     db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
       .run(source.name, target.name, 'deleting', sessionId);
+    broadcast({ type: 'status', id: sessionId, status: 'deleting' });
     
     await target.channels.fetch({ force: true });
     await target.roles.fetch({ force: true });
@@ -202,10 +225,11 @@ app.post('/api/clone', async (req, res) => {
     addLog(sessionId, '🎉 Complete!');
     broadcast({ type: 'complete', id: sessionId });
   } catch (err) {
+    console.error(`[ERROR ${sessionId}]`, err);
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('error', sessionId);
     addLog(sessionId, `💥 Error: ${err.message}`);
     broadcast({ type: 'error', id: sessionId, message: err.message });
-    selfClient.destroy();
+    try { selfClient.destroy(); } catch (e) {}
   }
 });
 
