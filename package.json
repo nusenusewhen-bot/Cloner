@@ -5,10 +5,4 @@
   "dependencies": {
     "discord.js-selfbot-v13": "3.3.0",
     "better-sqlite3": "^9.4.3",
-    "express": "^4.18.2",
-    "ws": "^8.16.0"
-  },
-  "scripts": {
-    "start": "node index.js"
-  }
-}
+    "express": "^
