@@ -16,6 +16,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREME
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
+
 app.get('/api/sessions', (req, res) => {
   const sessions = db.prepare('SELECT * FROM sessions ORDER BY id DESC LIMIT 10').all();
   res.json(sessions);
@@ -33,6 +35,8 @@ app.post('/api/clone', async (req, res) => {
   const sessionId = result.lastInsertRowid;
   
   broadcast({ type: 'cloneStart', id: sessionId });
+  
+  res.json({ success: true, id: sessionId, message: 'Clone started' });
   
   const selfClient = new SelfClient({ checkUpdate: false });
   selfClient.options.http.api = 'https://discord.com/api/v9';
@@ -130,12 +134,9 @@ app.post('/api/clone', async (req, res) => {
     selfClient.destroy();
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
     broadcast({ type: 'complete', id: sessionId, message: 'Clone complete!' });
-    
-    res.json({ success: true, id: sessionId });
   } catch (err) {
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('error', sessionId);
     broadcast({ type: 'error', id: sessionId, message: err.message });
-    res.json({ error: err.message });
   }
 });
 
