@@ -11,14 +11,11 @@
             color: #fff;
             font-family: 'Segoe UI', sans-serif;
             min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            padding: 20px;
         }
         .container {
-            width: 100%;
-            max-width: 500px;
-            padding: 40px;
+            max-width: 600px;
+            margin: 0 auto;
         }
         h1 {
             text-align: center;
@@ -34,17 +31,18 @@
             display: block;
             margin-bottom: 8px;
             color: #b9bbbe;
-            font-size: 14px;
+            font-size: 12px;
             text-transform: uppercase;
+            font-weight: bold;
         }
         input {
             width: 100%;
-            padding: 12px;
+            padding: 15px;
             background: #1a1a1a;
             border: 1px solid #333;
             border-radius: 8px;
             color: #fff;
-            font-size: 14px;
+            font-size: 16px;
         }
         input:focus {
             outline: none;
@@ -52,43 +50,81 @@
         }
         button {
             width: 100%;
-            padding: 15px;
+            padding: 18px;
             background: #5865f2;
             color: white;
             border: none;
             border-radius: 8px;
-            font-size: 16px;
+            font-size: 18px;
             cursor: pointer;
             margin-top: 10px;
+            font-weight: bold;
         }
         button:hover { background: #4752c4; }
         button:disabled { background: #333; cursor: not-allowed; }
         .status {
             margin-top: 20px;
-            padding: 15px;
+            padding: 20px;
             border-radius: 8px;
             background: #1a1a1a;
-            border-left: 3px solid #5865f2;
+            border-left: 4px solid #5865f2;
             display: none;
         }
         .status.show { display: block; }
         .status.error { border-left-color: #ed4245; }
         .status.success { border-left-color: #3ba55d; }
-        .log {
+        .log-container {
             margin-top: 30px;
-            max-height: 300px;
-            overflow-y: auto;
             background: #0f0f0f;
-            border-radius: 8px;
+            border-radius: 12px;
+            border: 1px solid #333;
+            max-height: 500px;
+            display: flex;
+            flex-direction: column;
+        }
+        .log-header {
+            padding: 15px 20px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            border-radius: 12px 12px 0 0;
+            font-weight: bold;
+            color: #3ba55d;
+        }
+        .log-content {
+            overflow-y: auto;
             padding: 15px;
+            max-height: 400px;
         }
         .log-entry {
-            padding: 8px;
+            padding: 10px 15px;
             margin: 5px 0;
             background: #1a1a1a;
-            border-radius: 4px;
+            border-radius: 6px;
             font-size: 13px;
-            font-family: monospace;
+            font-family: 'Courier New', monospace;
+            border-left: 3px solid #5865f2;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .log-entry.error { border-left-color: #ed4245; }
+        .log-entry.success { border-left-color: #3ba55d; }
+        .log-entry.info { border-left-color: #faa61a; }
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #5865f2, #eb459e);
+            width: 0%;
+            transition: width 0.3s;
         }
     </style>
 </head>
@@ -113,35 +149,69 @@
         
         <button onclick="startClone()" id="btn">Start Cloning</button>
         
-        <div class="status" id="status"></div>
+        <div class="status" id="status">
+            <div id="statusText">Starting...</div>
+            <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+        </div>
         
-        <div class="log" id="log"></div>
+        <div class="log-container" id="logContainer" style="display: none;">
+            <div class="log-header">📋 Activity Log</div>
+            <div class="log-content" id="logs"></div>
+        </div>
     </div>
 
     <script>
-        const ws = new WebSocket(`ws://${window.location.host}`);
-        const log = document.getElementById('log');
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        let currentId = null;
         
         ws.onmessage = (e) => {
             const data = JSON.parse(e.data);
-            addLog(`${data.type}: ${data.step || data.message || ''}`);
             
-            if (data.type === 'complete') {
+            if (data.type === 'log' && data.id === currentId) {
+                addLog(data.message);
+            } else if (data.type === 'status' && data.id === currentId) {
+                updateStatus(data.status);
+            } else if (data.type === 'complete' && data.id === currentId) {
                 document.getElementById('status').className = 'status show success';
-                document.getElementById('status').textContent = '✅ Clone Complete!';
+                document.getElementById('statusText').textContent = '✅ Clone Complete!';
+                document.getElementById('progress').style.width = '100%';
                 document.getElementById('btn').disabled = false;
-            } else if (data.type === 'error') {
+            } else if (data.type === 'error' && data.id === currentId) {
                 document.getElementById('status').className = 'status show error';
-                document.getElementById('status').textContent = '❌ Error: ' + data.message;
+                document.getElementById('statusText').textContent = '❌ Error: ' + data.message;
                 document.getElementById('btn').disabled = false;
             }
         };
         
+        ws.onerror = (e) => {
+            console.error('WebSocket error', e);
+        };
+        
         function addLog(msg) {
+            const logs = document.getElementById('logs');
             const entry = document.createElement('div');
             entry.className = 'log-entry';
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            log.insertBefore(entry, log.firstChild);
+            
+            if (msg.includes('✅') || msg.includes('🎉')) entry.classList.add('success');
+            else if (msg.includes('❌') || msg.includes('💥')) entry.classList.add('error');
+            else if (msg.includes('⚠️')) entry.classList.add('info');
+            
+            entry.textContent = msg;
+            logs.insertBefore(entry, logs.firstChild);
+        }
+        
+        function updateStatus(status) {
+            const statusText = document.getElementById('statusText');
+            const progress = document.getElementById('progress');
+            
+            if (status === 'deleting') {
+                statusText.textContent = '🗑️ Deleting old content...';
+                progress.style.width = '25%';
+            } else if (status === 'cloning') {
+                statusText.textContent = '📋 Cloning server...';
+                progress.style.width = '60%';
+            }
         }
         
         async function startClone() {
@@ -150,14 +220,16 @@
             const target = document.getElementById('target').value;
             
             if (!token || !source || !target) {
-                document.getElementById('status').className = 'status show error';
-                document.getElementById('status').textContent = 'Fill all fields';
+                alert('Fill all fields');
                 return;
             }
             
             document.getElementById('btn').disabled = true;
             document.getElementById('status').className = 'status show';
-            document.getElementById('status').textContent = 'Starting...';
+            document.getElementById('statusText').textContent = '🔑 Connecting...';
+            document.getElementById('progress').style.width = '10%';
+            document.getElementById('logContainer').style.display = 'flex';
+            document.getElementById('logs').innerHTML = '';
             
             try {
                 const res = await fetch('/api/clone', {
@@ -169,12 +241,15 @@
                 const data = await res.json();
                 if (data.error) {
                     document.getElementById('status').className = 'status show error';
-                    document.getElementById('status').textContent = '❌ ' + data.error;
+                    document.getElementById('statusText').textContent = '❌ ' + data.error;
                     document.getElementById('btn').disabled = false;
+                } else {
+                    currentId = data.id;
+                    addLog('🚀 Clone started - ID: ' + data.id);
                 }
             } catch (e) {
                 document.getElementById('status').className = 'status show error';
-                document.getElementById('status').textContent = '❌ Request failed';
+                document.getElementById('statusText').textContent = '❌ Request failed: ' + e.message;
                 document.getElementById('btn').disabled = false;
             }
         }
