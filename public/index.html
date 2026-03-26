@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Cloner Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #0a0a0a;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            text-align: center;
+            padding: 40px 0;
+            border-bottom: 2px solid #5865f2;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            font-size: 3em;
+            background: linear-gradient(45deg, #5865f2, #eb459e);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 20px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+        }
+        
+        .status.online {
+            border-color: #3ba55d;
+            color: #3ba55d;
+        }
+        
+        .status.offline {
+            border-color: #ed4245;
+            color: #ed4245;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 25px;
+            border: 1px solid #333;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: #5865f2;
+        }
+        
+        .card h3 {
+            color: #5865f2;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .stat-number {
+            font-size: 3em;
+            font-weight: bold;
+            color: #fff;
+        }
+        
+        .controls {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 25px;
+            border: 1px solid #333;
+            margin-bottom: 20px;
+        }
+        
+        .controls h2 {
+            color: #eb459e;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            background: #5865f2;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #4752c4;
+        }
+        
+        button.danger {
+            background: #ed4245;
+        }
+        
+        button.danger:hover {
+            background: #c03537;
+        }
+        
+        .log {
+            background: #0f0f0f;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #333;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .log h2 {
+            color: #3ba55d;
+            margin-bottom: 15px;
+        }
+        
+        .log-entry {
+            padding: 8px;
+            margin: 5px 0;
+            border-left: 3px solid #5865f2;
+            background: #1a1a1a;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        
+        .log-entry.error {
+            border-left-color: #ed4245;
+        }
+        
+        .log-entry.success {
+            border-left-color: #3ba55d;
+        }
+        
+        .log-entry.info {
+            border-left-color: #faa61a;
+        }
+        
+        input {
+            background: #0f0f0f;
+            border: 1px solid #333;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .owner-only {
+            border: 2px solid #eb459e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔥 Server Cloner Pro</h1>
+            <div class="status offline" id="status">Connecting...</div>
+        </header>
+        
+        <div class="grid">
+            <div class="card">
+                <h3>🔑 Total Keys</h3>
+                <div class="stat-number" id="keyCount">0</div>
+            </div>
+            <div class="card">
+                <h3>👥 Active Users</h3>
+                <div class="stat-number" id="userCount">0</div>
+            </div>
+            <div class="card">
+                <h3>⚡ Active Sessions</h3>
+                <div class="stat-number" id="sessionCount">0</div>
+            </div>
+            <div class="card">
+                <h3>⏱️ Uptime</h3>
+                <div class="stat-number" id="uptime">0s</div>
+            </div>
+        </div>
+        
+        <div class="controls owner-only" id="ownerControls" style="display: none;">
+            <h2>👑 Owner Controls</h2>
+            <button onclick="generateKey()">Generate Key</button>
+            <button class="danger" onclick="clearLogs()">Clear Logs</button>
+            <div id="generatedKeys"></div>
+        </div>
+        
+        <div class="log">
+            <h2>📊 Live Activity Log</h2>
+            <div id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        const OWNER_ID = '1422945082746601594';
+        let ws;
+        let reconnectInterval;
+        
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}`);
+            
+            ws.onopen = () => {
+                document.getElementById('status').textContent = 'Online';
+                document.getElementById('status').className = 'status online';
+                addLog('Connected to bot', 'success');
+                fetchStats();
+                
+                if (localStorage.getItem('userId') === OWNER_ID) {
+                    document.getElementById('ownerControls').style.display = 'block';
+                }
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('status').textContent = 'Offline';
+                document.getElementById('status').className = 'status offline';
+                addLog('Disconnected, reconnecting...', 'error');
+                setTimeout(connect, 3000);
+            };
+            
+            ws.onerror = (err) => {
+                addLog('WebSocket error', 'error');
+            };
+        }
+        
+        function handleMessage(data) {
+            switch(data.type) {
+                case 'status':
+                    addLog(`Bot ${data.bot} is ${data.status}`, 'success');
+                    break;
+                case 'newKey':
+                    addLog(`New key generated: ${data.key}${data.by ? ' by ' + data.by : ''}`, 'info');
+                    if (data.by) fetchStats();
+                    break;
+                case 'keyRedeemed':
+                    addLog(`${data.user} redeemed key ${data.key}`, 'info');
+                    fetchStats();
+                    break;
+                case 'tokenSet':
+                    addLog(`Token set for user: ${data.user}`, 'info');
+                    break;
+                case 'cloneStart':
+                    addLog(`🚀 ${data.user} started cloning`, 'info');
+                    break;
+                case 'cloneProgress':
+                    addLog(`📋 ${data.user}: ${data.step}...`, 'info');
+                    break;
+                case 'cloneComplete':
+                    addLog(`✅ ${data.user} cloned ${data.source} → ${data.target}`, 'success');
+                    fetchStats();
+                    break;
+                case 'cloneError':
+                    addLog(`❌ ${data.user} error: ${data.error}`, 'error');
+                    break;
+            }
+        }
+        
+        function addLog(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.insertBefore(entry, logs.firstChild);
+            
+            while (logs.children.length > 50) {
+                logs.removeChild(logs.lastChild);
+            }
+        }
+        
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+        
+        function generateKey() {
+            const userId = prompt('Enter your Discord User ID:');
+            if (userId === OWNER_ID) {
+                ws.send(JSON.stringify({ type: 'generateKey', userId }));
+                addLog('Requested key generation', 'info');
+            } else {
+                addLog('Unauthorized', 'error');
+            }
+        }
+        
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const stats = await res.json();
+                document.getElementById('keyCount').textContent = stats.keys;
+                document.getElementById('userCount').textContent = stats.users;
+                document.getElementById('sessionCount').textContent = stats.activeSessions;
+                document.getElementById('uptime').textContent = formatTime(stats.uptime);
+            } catch (e) {
+                console.error('Failed to fetch stats');
+            }
+        }
+        
+        function formatTime(seconds) {
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${hrs}h ${mins}m ${secs}s`;
+        }
+        
+        setInterval(fetchStats, 5000);
+        connect();
+    </script>
+</body>
+</html>
