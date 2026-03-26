@@ -184,10 +184,6 @@
             }
         };
         
-        ws.onerror = (e) => {
-            console.error('WebSocket error', e);
-        };
-        
         function addLog(msg) {
             const logs = document.getElementById('logs');
             const entry = document.createElement('div');
