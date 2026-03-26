@@ -1,7 +1,15 @@
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const path = require('path');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, Partials } = require('discord.js');
 const Database = require('better-sqlite3');
 const { getSuperProperties } = require('./superprops');
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
 const db = new Database('./clones.db');
 db.exec(`
@@ -17,6 +25,47 @@ const PREFIX = '!';
 if (!BOT_TOKEN) {
   console.error('BOT_TOKEN not found');
   process.exit(1);
+}
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/stats', (req, res) => {
+  const keys = db.prepare('SELECT COUNT(*) as count FROM keys').get();
+  const access = db.prepare('SELECT COUNT(*) as count FROM access').get();
+  const sessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get();
+  res.json({ 
+    bot: bot.user?.tag || 'Starting', 
+    keys: keys.count, 
+    users: access.count, 
+    activeSessions: sessions.count,
+    uptime: process.uptime()
+  });
+});
+
+const clients = new Set();
+
+wss.on('connection', (ws) => {
+  clients.add(ws);
+  ws.on('close', () => clients.delete(ws));
+  ws.on('message', async (data) => {
+    try {
+      const msg = JSON.parse(data);
+      if (msg.type === 'generateKey' && msg.userId === OWNER_ID) {
+        const key = 'CLONE-' + Math.random().toString(36).substring(2, 15).toUpperCase();
+        db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
+        broadcast({ type: 'newKey', key });
+      }
+    } catch (e) {}
+  });
+});
+
+function broadcast(data) {
+  clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
 }
 
 const bot = new Client({
@@ -35,7 +84,7 @@ function generateKey() {
 
 bot.once('ready', () => {
   console.log(`Logged in as ${bot.user.tag}`);
-  console.log('Commands: !clonekey, !revoke <key>, !access @user, !redeemkey <key>, !serverclone');
+  broadcast({ type: 'status', bot: bot.user.tag, status: 'online' });
 });
 
 async function sendClonePanel(channel, userId) {
@@ -71,6 +120,7 @@ bot.on('messageCreate', async (message) => {
     if (message.author.id !== OWNER_ID) return message.reply('No');
     const key = generateKey();
     db.prepare('INSERT INTO keys (key) VALUES (?)').run(key);
+    broadcast({ type: 'newKey', key, by: message.author.tag });
     return message.reply(`Key: \`${key}\``);
   }
   
@@ -100,6 +150,7 @@ bot.on('messageCreate', async (message) => {
     db.prepare('UPDATE keys SET uses = uses - 1 WHERE key = ?').run(key);
     if (keyData.uses <= 1) db.prepare('UPDATE keys SET active = 0 WHERE key = ?').run(key);
     
+    broadcast({ type: 'keyRedeemed', user: message.author.tag, key });
     return message.reply('Key redeemed! Use !serverclone');
   }
   
@@ -154,6 +205,7 @@ bot.on('interactionCreate', async (interaction) => {
         }
         
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        broadcast({ type: 'cloneStart', user: interaction.user.tag });
         
         const selfClient = new SelfClient({ checkUpdate: false });
         selfClient.options.http.api = 'https://discord.com/api/v9';
@@ -166,6 +218,7 @@ bot.on('interactionCreate', async (interaction) => {
           const targetGuild = await selfClient.guilds.fetch(session.target_guild);
           
           await interaction.editReply({ content: '🔴 Deleting existing roles and channels...' }).catch(() => {});
+          broadcast({ type: 'cloneProgress', step: 'deleting', user: interaction.user.tag });
           
           const existingRoles = targetGuild.roles.cache.filter(r => r.name !== '@everyone' && r.editable);
           for (const [, role] of existingRoles) {
@@ -178,6 +231,7 @@ bot.on('interactionCreate', async (interaction) => {
           }
           
           await interaction.editReply({ content: '🟡 Cloning server...' }).catch(() => {});
+          broadcast({ type: 'cloneProgress', step: 'cloning', user: interaction.user.tag });
           
           await targetGuild.setName(sourceGuild.name);
           if (sourceGuild.icon) await targetGuild.setIcon(sourceGuild.iconURL({ dynamic: true }));
@@ -247,8 +301,10 @@ bot.on('interactionCreate', async (interaction) => {
           selfClient.destroy();
           db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
           
+          broadcast({ type: 'cloneComplete', user: interaction.user.tag, source: sourceGuild.name, target: targetGuild.name });
           return await interaction.editReply({ content: '✅ Clone complete!' }).catch(() => {});
         } catch (err) {
+          broadcast({ type: 'cloneError', user: interaction.user.tag, error: err.message });
           return await interaction.editReply({ content: `Error: ${err.message}` }).catch(() => {});
         }
       }
@@ -270,6 +326,7 @@ bot.on('interactionCreate', async (interaction) => {
           db.prepare('INSERT OR REPLACE INTO sessions (user_id, token, source_guild, target_guild, source_name, target_name) VALUES (?, ?, ?, ?, ?, ?)')
             .run(userId, token, existing.source_guild || '', existing.target_guild || '', existing.source_name || '', existing.target_name || '');
           
+          broadcast({ type: 'tokenSet', user: user.username });
           return await interaction.reply({ content: `✅ Logged in as @${user.username}`, ephemeral: true }).catch(() => {});
         } catch (e) {
           return await interaction.reply({ content: '❌ Invalid token', ephemeral: true }).catch(() => {});
@@ -326,6 +383,9 @@ bot.on('interactionCreate', async (interaction) => {
     console.error('Interaction error:', err);
   }
 });
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 bot.login(BOT_TOKEN).catch(err => {
   console.error('Failed to login:', err.message);
