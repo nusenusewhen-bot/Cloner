@@ -38,7 +38,6 @@ function addLog(sessionId, message) {
   const timestamp = new Date().toLocaleTimeString();
   const logMessage = `[${timestamp}] ${message}`;
   
-  // Console log for Railway
   console.log(`[Session ${sessionId}] ${logMessage}`);
   
   const session = db.prepare('SELECT logs FROM sessions WHERE id = ?').get(sessionId);
@@ -153,10 +152,11 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
     await source.roles.fetch();
     await source.channels.fetch();
 
-    // CREATE ROLES (in reverse order to maintain position)
+    // CREATE ROLES (highest position first = appears at top in Discord)
     addLog(sessionId, '🎭 Creating roles...');
     const roleMap = new Map();
     
+    // Sort by position DESCENDING (highest number first = top of list)
     const sortedRoles = source.roles.cache
       .filter(r => r.name !== '@everyone')
       .sort((a, b) => b.position - a.position);
@@ -168,11 +168,11 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
           color: role.color,
           hoist: role.hoist,
           mentionable: role.mentionable,
-          permissions: role.permissions.bitfield,
-          position: role.position
+          permissions: role.permissions.bitfield
+          // Don't set position here, let Discord handle it by creation order
         });
         roleMap.set(role.id, newRole);
-        addLog(sessionId, `✅ Created role: ${role.name}`);
+        addLog(sessionId, `✅ Created role: ${role.name} (pos: ${role.position})`);
         await new Promise(r => setTimeout(r, 350));
       } catch (err) {
         addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
@@ -181,13 +181,13 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
 
     const everyoneRole = freshTarget.roles.everyone;
 
-    // CREATE CATEGORIES FIRST
+    // CREATE CATEGORIES FIRST (lowest position first to maintain order)
     addLog(sessionId, '📁 Creating categories...');
     const categoryMap = new Map();
     
     const categories = source.channels.cache
       .filter(c => c.type === 'GUILD_CATEGORY')
-      .sort((a, b) => a.position - b.position);
+      .sort((a, b) => a.position - b.position); // Lowest first
 
     for (const [, category] of categories) {
       try {
@@ -206,7 +206,6 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
 
         const newCategory = await freshTarget.channels.create(category.name, {
           type: 'GUILD_CATEGORY',
-          position: category.position,
           permissionOverwrites: permissionOverwrites
         });
         
@@ -218,12 +217,12 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
       }
     }
 
-    // CREATE CHANNELS
+    // CREATE CHANNELS (skip ticket- channels, lowest position first)
     addLog(sessionId, '💬 Creating channels...');
     
     const channels = source.channels.cache
-      .filter(c => c.type !== 'GUILD_CATEGORY')
-      .sort((a, b) => a.position - b.position);
+      .filter(c => c.type !== 'GUILD_CATEGORY' && !c.name.toLowerCase().startsWith('ticket-'))
+      .sort((a, b) => a.position - b.position); // Lowest first to maintain order
 
     for (const [, channel] of channels) {
       try {
@@ -247,7 +246,6 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
           topic: channel.topic || undefined,
           nsfw: channel.nsfw || undefined,
           parent: parentId || undefined,
-          position: channel.position,
           permissionOverwrites: permissionOverwrites
         };
 
