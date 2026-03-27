@@ -19,7 +19,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS sessions (
   source_name TEXT,
   target_name TEXT,
   status TEXT DEFAULT 'idle',
-  logs TEXT DEFAULT '[]'
+  logs TEXT DEFAULT '[]',
+  options TEXT DEFAULT '{}'
 )`);
 
 app.use(express.json());
@@ -32,6 +33,17 @@ app.get('/', (req, res) =>
 app.get('/api/sessions', (req, res) => {
   const sessions = db.prepare('SELECT * FROM sessions ORDER BY id DESC LIMIT 10').all();
   res.json(sessions);
+});
+
+app.get('/api/session/:id', (req, res) => {
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id);
+  if (!session) return res.json({ error: 'Not found' });
+  res.json({
+    id: session.id,
+    status: session.status,
+    logs: JSON.parse(session.logs || '[]'),
+    options: JSON.parse(session.options || '{}')
+  });
 });
 
 function addLog(sessionId, message) {
@@ -58,22 +70,24 @@ function broadcast(data) {
 }
 
 app.post('/api/clone', async (req, res) => {
-  const { token, sourceGuild, targetGuild } = req.body;
+  const { token, sourceGuild, targetGuild, options } = req.body;
   if (!token || !sourceGuild || !targetGuild) {
     return res.json({ error: 'Missing fields' });
   }
 
+  const opts = options || { banner: true, icon: true, channels: true, roles: true };
+
   const result = db.prepare(
-    'INSERT INTO sessions (token, source_guild, target_guild, logs) VALUES (?, ?, ?, ?)'
-  ).run(token, sourceGuild, targetGuild, '[]');
+    'INSERT INTO sessions (token, source_guild, target_guild, logs, options) VALUES (?, ?, ?, ?, ?)'
+  ).run(token, sourceGuild, targetGuild, '[]', JSON.stringify(opts));
 
   const sessionId = result.lastInsertRowid;
 
   res.json({ success: true, id: sessionId });
-  setImmediate(() => runClone(sessionId, token, sourceGuild, targetGuild));
+  setImmediate(() => runClone(sessionId, token, sourceGuild, targetGuild, opts));
 });
 
-async function runClone(sessionId, token, sourceGuild, targetGuild) {
+async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
   const selfClient = new SelfClient({ 
     checkUpdate: false,
     autoRedeemNitro: false,
@@ -107,23 +121,25 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
     await target.channels.fetch();
     await target.roles.fetch();
 
-    for (const [, role] of target.roles.cache.filter(r => r.name !== '@everyone' && r.editable)) {
-      try {
-        await role.delete();
-        addLog(sessionId, `❌ Deleted role: ${role.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
+    if (options.channels !== false) {
+      for (const [, role] of target.roles.cache.filter(r => r.name !== '@everyone' && r.editable)) {
+        try {
+          await role.delete();
+          addLog(sessionId, `❌ Deleted role: ${role.name}`);
+          await new Promise(r => setTimeout(r, 350));
+        } catch (err) {
+          addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
+        }
       }
-    }
 
-    for (const channel of target.channels.cache.values()) {
-      try {
-        await channel.delete();
-        addLog(sessionId, `❌ Deleted channel: #${channel.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
+      for (const channel of target.channels.cache.values()) {
+        try {
+          await channel.delete();
+          addLog(sessionId, `❌ Deleted channel: #${channel.name}`);
+          await new Promise(r => setTimeout(r, 350));
+        } catch (err) {
+          addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
+        }
       }
     }
 
@@ -138,7 +154,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
 
     await freshTarget.setName(source.name);
 
-    if (source.icon) {
+    if (options.icon !== false && source.icon) {
       try {
         await freshTarget.setIcon(source.iconURL({ dynamic: true }));
         addLog(sessionId, '🖼️ Icon copied');
@@ -147,122 +163,137 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
       }
     }
 
-    // FETCH SOURCE DATA
-    addLog(sessionId, '📥 Fetching source server data...');
+    if (options.banner !== false && source.banner) {
+      try {
+        await freshTarget.setBanner(source.bannerURL({ dynamic: true }));
+        addLog(sessionId, '🎨 Banner copied');
+      } catch (err) {
+        addLog(sessionId, `⚠️ Failed to copy banner: ${err.message}`);
+      }
+    }
+
+    if (options.channels === false && options.roles === false) {
+      addLog(sessionId, '🎉 Clone complete! (Server info only)');
+      db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
+      broadcast({ type: 'complete', id: sessionId });
+      selfClient.destroy();
+      return;
+    }
+
     await source.roles.fetch();
     await source.channels.fetch();
 
-    // CREATE ROLES (highest position first = appears at top in Discord)
-    addLog(sessionId, '🎭 Creating roles...');
     const roleMap = new Map();
     
-    // Sort by position DESCENDING (highest number first = top of list)
-    const sortedRoles = source.roles.cache
-      .filter(r => r.name !== '@everyone')
-      .sort((a, b) => b.position - a.position);
+    if (options.roles !== false) {
+      addLog(sessionId, '🎭 Creating roles...');
+      
+      const sortedRoles = source.roles.cache
+        .filter(r => r.name !== '@everyone')
+        .sort((a, b) => b.position - a.position);
 
-    for (const [, role] of sortedRoles) {
-      try {
-        const newRole = await freshTarget.roles.create({
-          name: role.name,
-          color: role.color,
-          hoist: role.hoist,
-          mentionable: role.mentionable,
-          permissions: role.permissions.bitfield
-          // Don't set position here, let Discord handle it by creation order
-        });
-        roleMap.set(role.id, newRole);
-        addLog(sessionId, `✅ Created role: ${role.name} (pos: ${role.position})`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
+      for (const [, role] of sortedRoles) {
+        try {
+          const newRole = await freshTarget.roles.create({
+            name: role.name,
+            color: role.color,
+            hoist: role.hoist,
+            mentionable: role.mentionable,
+            permissions: role.permissions.bitfield
+          });
+          roleMap.set(role.id, newRole);
+          addLog(sessionId, `✅ Created role: ${role.name}`);
+          await new Promise(r => setTimeout(r, 350));
+        } catch (err) {
+          addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
+        }
       }
     }
 
     const everyoneRole = freshTarget.roles.everyone;
 
-    // CREATE CATEGORIES FIRST (lowest position first to maintain order)
-    addLog(sessionId, '📁 Creating categories...');
-    const categoryMap = new Map();
-    
-    const categories = source.channels.cache
-      .filter(c => c.type === 'GUILD_CATEGORY')
-      .sort((a, b) => a.position - b.position); // Lowest first
+    if (options.channels !== false) {
+      addLog(sessionId, '📁 Creating categories...');
+      const categoryMap = new Map();
+      
+      const categories = source.channels.cache
+        .filter(c => c.type === 'GUILD_CATEGORY')
+        .sort((a, b) => a.position - b.position);
 
-    for (const [, category] of categories) {
-      try {
-        const permissionOverwrites = category.permissionOverwrites.cache.map(overwrite => {
-          const roleId = overwrite.id === source.roles.everyone.id 
-            ? everyoneRole.id 
-            : (roleMap.get(overwrite.id)?.id || overwrite.id);
+      for (const [, category] of categories) {
+        try {
+          const permissionOverwrites = category.permissionOverwrites.cache.map(overwrite => {
+            const roleId = overwrite.id === source.roles.everyone.id 
+              ? everyoneRole.id 
+              : (roleMap.get(overwrite.id)?.id || overwrite.id);
+            
+            return {
+              id: roleId,
+              allow: overwrite.allow.bitfield,
+              deny: overwrite.deny.bitfield,
+              type: overwrite.type
+            };
+          });
+
+          const newCategory = await freshTarget.channels.create(category.name, {
+            type: 'GUILD_CATEGORY',
+            permissionOverwrites: permissionOverwrites
+          });
           
-          return {
-            id: roleId,
-            allow: overwrite.allow.bitfield,
-            deny: overwrite.deny.bitfield,
-            type: overwrite.type
-          };
-        });
-
-        const newCategory = await freshTarget.channels.create(category.name, {
-          type: 'GUILD_CATEGORY',
-          permissionOverwrites: permissionOverwrites
-        });
-        
-        categoryMap.set(category.id, newCategory);
-        addLog(sessionId, `✅ Created category: ${category.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `❌ Failed to create category ${category.name}: ${err.message}`);
+          categoryMap.set(category.id, newCategory);
+          addLog(sessionId, `✅ Created category: ${category.name}`);
+          await new Promise(r => setTimeout(r, 350));
+        } catch (err) {
+          addLog(sessionId, `❌ Failed to create category ${category.name}: ${err.message}`);
+        }
       }
-    }
 
-    // CREATE CHANNELS (skip ticket- channels, lowest position first)
-    addLog(sessionId, '💬 Creating channels...');
-    
-    const channels = source.channels.cache
-      .filter(c => c.type !== 'GUILD_CATEGORY' && !c.name.toLowerCase().startsWith('ticket-'))
-      .sort((a, b) => a.position - b.position); // Lowest first to maintain order
+      addLog(sessionId, '💬 Creating channels...');
+      
+      const channels = source.channels.cache
+        .filter(c => c.type !== 'GUILD_CATEGORY' && !c.name.toLowerCase().startsWith('ticket-'))
+        .sort((a, b) => a.position - b.position);
 
-    for (const [, channel] of channels) {
-      try {
-        const parentId = channel.parentId ? categoryMap.get(channel.parentId)?.id : null;
-        
-        const permissionOverwrites = channel.permissionOverwrites.cache.map(overwrite => {
-          const roleId = overwrite.id === source.roles.everyone.id 
-            ? everyoneRole.id 
-            : (roleMap.get(overwrite.id)?.id || overwrite.id);
+      for (const [, channel] of channels) {
+        try {
+          const parentId = channel.parentId ? categoryMap.get(channel.parentId)?.id : null;
           
-          return {
-            id: roleId,
-            allow: overwrite.allow.bitfield,
-            deny: overwrite.deny.bitfield,
-            type: overwrite.type
+          const permissionOverwrites = channel.permissionOverwrites.cache.map(overwrite => {
+            const roleId = overwrite.id === source.roles.everyone.id 
+              ? everyoneRole.id 
+              : (roleMap.get(overwrite.id)?.id || overwrite.id);
+            
+            return {
+              id: roleId,
+              allow: overwrite.allow.bitfield,
+              deny: overwrite.deny.bitfield,
+              type: overwrite.type
+            };
+          });
+
+          const channelData = {
+            type: channel.type,
+            topic: channel.topic || undefined,
+            nsfw: channel.nsfw || undefined,
+            parent: parentId || undefined,
+            permissionOverwrites: permissionOverwrites
           };
-        });
 
-        const channelData = {
-          type: channel.type,
-          topic: channel.topic || undefined,
-          nsfw: channel.nsfw || undefined,
-          parent: parentId || undefined,
-          permissionOverwrites: permissionOverwrites
-        };
+          if (channel.type === 'GUILD_TEXT') {
+            channelData.rateLimitPerUser = channel.rateLimitPerUser || undefined;
+          }
+          
+          if (channel.type === 'GUILD_VOICE') {
+            channelData.bitrate = channel.bitrate || undefined;
+            channelData.userLimit = channel.userLimit || undefined;
+          }
 
-        if (channel.type === 'GUILD_TEXT') {
-          channelData.rateLimitPerUser = channel.rateLimitPerUser || undefined;
+          await freshTarget.channels.create(channel.name, channelData);
+          addLog(sessionId, `✅ Created channel: #${channel.name}`);
+          await new Promise(r => setTimeout(r, 350));
+        } catch (err) {
+          addLog(sessionId, `❌ Failed to create channel #${channel.name}: ${err.message}`);
         }
-        
-        if (channel.type === 'GUILD_VOICE') {
-          channelData.bitrate = channel.bitrate || undefined;
-          channelData.userLimit = channel.userLimit || undefined;
-        }
-
-        await freshTarget.channels.create(channel.name, channelData);
-        addLog(sessionId, `✅ Created channel: #${channel.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `❌ Failed to create channel #${channel.name}: ${err.message}`);
       }
     }
 
