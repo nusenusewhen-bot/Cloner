@@ -121,7 +121,9 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     await target.channels.fetch();
     await target.roles.fetch();
 
-    if (options.channels !== false) {
+    // DELETE ROLES if roles option is enabled
+    if (options.roles !== false) {
+      addLog(sessionId, '🗑️ Deleting old roles...');
       for (const [, role] of target.roles.cache.filter(r => r.name !== '@everyone' && r.editable)) {
         try {
           await role.delete();
@@ -131,7 +133,11 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
         }
       }
+    }
 
+    // DELETE CHANNELS if channels option is enabled
+    if (options.channels !== false) {
+      addLog(sessionId, '🗑️ Deleting old channels...');
       for (const channel of target.channels.cache.values()) {
         try {
           await channel.delete();
