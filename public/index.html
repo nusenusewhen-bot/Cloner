@@ -126,6 +126,39 @@
             width: 0%;
             transition: width 0.3s;
         }
+        .options {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .option-row {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #333;
+        }
+        .option-row:last-child { border-bottom: none; }
+        .option-row input[type="checkbox"] {
+            width: auto;
+            margin-right: 12px;
+            cursor: pointer;
+        }
+        .option-row label {
+            margin: 0;
+            text-transform: none;
+            font-size: 14px;
+            cursor: pointer;
+            flex: 1;
+        }
+        .option-all {
+            background: #5865f2;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+        .option-all label { color: #fff; }
     </style>
 </head>
 <body>
@@ -146,6 +179,29 @@
             <label>Target Server ID (Copy To)</label>
             <input type="text" id="target" placeholder="Server ID to clone into...">
         </div>
+
+        <div class="options">
+            <div class="option-row option-all">
+                <input type="checkbox" id="optAll" checked onchange="toggleAll()">
+                <label for="optAll">🎯 Clone All</label>
+            </div>
+            <div class="option-row">
+                <input type="checkbox" id="optBanner" class="optItem" checked>
+                <label for="optBanner">🎨 Banner</label>
+            </div>
+            <div class="option-row">
+                <input type="checkbox" id="optIcon" class="optItem" checked>
+                <label for="optIcon">🖼️ Server Icon/Logo</label>
+            </div>
+            <div class="option-row">
+                <input type="checkbox" id="optChannels" class="optItem" checked>
+                <label for="optChannels">📁 Channels & Categories</label>
+            </div>
+            <div class="option-row">
+                <input type="checkbox" id="optRoles" class="optItem" checked>
+                <label for="optRoles">🎭 Roles</label>
+            </div>
+        </div>
         
         <button onclick="startClone()" id="btn">Start Cloning</button>
         
@@ -161,27 +217,108 @@
     </div>
 
     <script>
-        const ws = new WebSocket(`wss://${window.location.host}/ws`);
+        let ws = null;
         let currentId = null;
-        
-        ws.onmessage = (e) => {
-            const data = JSON.parse(e.data);
-            
+        let pollInterval = null;
+        let wsConnected = false;
+
+        function connectWS() {
+            try {
+                ws = new WebSocket(`wss://${window.location.host}/ws`);
+                
+                ws.onopen = () => {
+                    wsConnected = true;
+                    console.log('WS connected');
+                };
+                
+                ws.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    handleMessage(data);
+                };
+                
+                ws.onerror = () => {
+                    wsConnected = false;
+                };
+                
+                ws.onclose = () => {
+                    wsConnected = false;
+                    setTimeout(connectWS, 3000);
+                };
+            } catch(e) {
+                wsConnected = false;
+            }
+        }
+
+        connectWS();
+
+        function handleMessage(data) {
             if (data.type === 'log' && data.id === currentId) {
                 addLog(data.message);
             } else if (data.type === 'status' && data.id === currentId) {
                 updateStatus(data.status);
             } else if (data.type === 'complete' && data.id === currentId) {
+                stopPolling();
                 document.getElementById('status').className = 'status show success';
                 document.getElementById('statusText').textContent = '✅ Clone Complete!';
                 document.getElementById('progress').style.width = '100%';
                 document.getElementById('btn').disabled = false;
             } else if (data.type === 'error' && data.id === currentId) {
+                stopPolling();
                 document.getElementById('status').className = 'status show error';
                 document.getElementById('statusText').textContent = '❌ Error: ' + data.message;
                 document.getElementById('btn').disabled = false;
             }
-        };
+        }
+
+        function toggleAll() {
+            const allChecked = document.getElementById('optAll').checked;
+            document.querySelectorAll('.optItem').forEach(cb => cb.checked = allChecked);
+        }
+
+        document.querySelectorAll('.optItem').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const all = document.querySelectorAll('.optItem');
+                const checked = document.querySelectorAll('.optItem:checked');
+                document.getElementById('optAll').checked = all.length === checked.length;
+            });
+        });
+
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(async () => {
+                if (!currentId || wsConnected) return;
+                try {
+                    const res = await fetch(`/api/session/${currentId}`);
+                    const data = await res.json();
+                    if (data.logs) {
+                        const logsDiv = document.getElementById('logs');
+                        const currentLogs = Array.from(logsDiv.children).map(c => c.textContent);
+                        data.logs.forEach(log => {
+                            if (!currentLogs.includes(log)) addLog(log);
+                        });
+                    }
+                    if (data.status === 'completed') {
+                        stopPolling();
+                        document.getElementById('status').className = 'status show success';
+                        document.getElementById('statusText').textContent = '✅ Clone Complete!';
+                        document.getElementById('progress').style.width = '100%';
+                        document.getElementById('btn').disabled = false;
+                    } else if (data.status === 'error') {
+                        stopPolling();
+                        document.getElementById('status').className = 'status show error';
+                        document.getElementById('statusText').textContent = '❌ Error occurred';
+                        document.getElementById('btn').disabled = false;
+                    }
+                } catch(e) {}
+            }, 1000);
+        }
+
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
         
         function addLog(msg) {
             const logs = document.getElementById('logs');
@@ -218,6 +355,13 @@
                 alert('Fill all fields');
                 return;
             }
+
+            const options = {
+                banner: document.getElementById('optBanner').checked,
+                icon: document.getElementById('optIcon').checked,
+                channels: document.getElementById('optChannels').checked,
+                roles: document.getElementById('optRoles').checked
+            };
             
             document.getElementById('btn').disabled = true;
             document.getElementById('status').className = 'status show';
@@ -230,7 +374,7 @@
                 const res = await fetch('/api/clone', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token, sourceGuild: source, targetGuild: target })
+                    body: JSON.stringify({ token, sourceGuild: source, targetGuild: target, options })
                 });
                 
                 const data = await res.json();
@@ -241,6 +385,7 @@
                 } else {
                     currentId = data.id;
                     addLog('🚀 Clone started - ID: ' + data.id);
+                    startPolling();
                 }
             } catch (e) {
                 document.getElementById('status').className = 'status show error';
