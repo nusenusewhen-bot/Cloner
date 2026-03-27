@@ -35,13 +35,19 @@ app.get('/api/sessions', (req, res) => {
 });
 
 function addLog(sessionId, message) {
-  console.log(`[${sessionId}] ${message}`);
+  const timestamp = new Date().toLocaleTimeString();
+  const logMessage = `[${timestamp}] ${message}`;
+  
+  // Console log for Railway
+  console.log(`[Session ${sessionId}] ${logMessage}`);
+  
   const session = db.prepare('SELECT logs FROM sessions WHERE id = ?').get(sessionId);
   const logs = JSON.parse(session?.logs || '[]');
-  logs.unshift(`[${new Date().toLocaleTimeString()}] ${message}`);
+  logs.unshift(logMessage);
   db.prepare('UPDATE sessions SET logs = ? WHERE id = ?')
     .run(JSON.stringify(logs.slice(0, 100)), sessionId);
-  broadcast({ type: 'log', id: sessionId, message });
+    
+  broadcast({ type: 'log', id: sessionId, message: logMessage });
 }
 
 function broadcast(data) {
@@ -135,87 +141,6 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
 
     if (source.icon) {
       try {
-        await freshTarget.setIcon(source.iconURL({ dynamic:targetGuild) {
-    return res.json({ error: 'Missing fields' });
-  }
-
-  const result = db.prepare(
-    'INSERT INTO sessions (token, source_guild, target_guild, logs) VALUES (?, ?, ?, ?)'
-  ).run(token, sourceGuild, targetGuild, '[]');
-
-  const sessionId = result.lastInsertRowid;
-
-  res.json({ success: true, id: sessionId });
-  setImmediate(() => runClone(sessionId, token, sourceGuild, targetGuild));
-});
-
-async function runClone(sessionId, token, sourceGuild, targetGuild) {
-  const selfClient = new SelfClient({ 
-    checkUpdate: false,
-    autoRedeemNitro: false,
-    ws: {
-      properties: getSuperProperties()
-    }
-  });
-
-  try {
-    addLog(sessionId, '🔑 Logging in...');
-    
-    await selfClient.login(token);
-    
-    addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
-
-    const source = await selfClient.guilds.fetch(sourceGuild, { force: true }).catch(e => {
-      throw new Error(`Cannot access source server: ${e.message}`);
-    });
-    
-    const target = await selfClient.guilds.fetch(targetGuild, { force: true }).catch(e => {
-      throw new Error(`Cannot access target server: ${e.message}`);
-    });
-
-    addLog(sessionId, `✅ Source: ${source.name} | Target: ${target.name}`);
-
-    db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
-      .run(source.name, target.name, 'deleting', sessionId);
-
-    broadcast({ type: 'status', id: sessionId, status: 'deleting' });
-
-    await target.channels.fetch();
-    await target.roles.fetch();
-
-    for (const [, role] of target.roles.cache.filter(r => r.name !== '@everyone' && r.editable)) {
-      try {
-        await role.delete();
-        addLog(sessionId, `❌ Deleted role: ${role.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
-      }
-    }
-
-    for (const channel of target.channels.cache.values()) {
-      try {
-        await channel.delete();
-        addLog(sessionId, `❌ Deleted channel: #${channel.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
-      }
-    }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    const freshTarget = await selfClient.guilds.fetch(targetGuild, { force: true });
-
-    db.prepare('UPDATE sessions SET status = ? WHERE id = ?')
-      .run('cloning', sessionId);
-
-    broadcast({ type: 'status', id: sessionId, status: 'cloning' });
-
-    await freshTarget.setName(source.name);
-
-    if (source.icon) {
-      try {
         await freshTarget.setIcon(source.iconURL({ dynamic: true }));
         addLog(sessionId, '🖼️ Icon copied');
       } catch (err) {
@@ -230,7 +155,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
 
     // CREATE ROLES (in reverse order to maintain position)
     addLog(sessionId, '🎭 Creating roles...');
-    const roleMap = new Map(); // old role ID -> new role
+    const roleMap = new Map();
     
     const sortedRoles = source.roles.cache
       .filter(r => r.name !== '@everyone')
@@ -254,12 +179,11 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
       }
     }
 
-    // GET @everyone ROLE FOR PERMISSION OVERWRITES
     const everyoneRole = freshTarget.roles.everyone;
 
     // CREATE CATEGORIES FIRST
     addLog(sessionId, '📁 Creating categories...');
-    const categoryMap = new Map(); // old channel ID -> new channel
+    const categoryMap = new Map();
     
     const categories = source.channels.cache
       .filter(c => c.type === 'GUILD_CATEGORY')
@@ -327,212 +251,10 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
           permissionOverwrites: permissionOverwrites
         };
 
-        // Text channel specific
         if (channel.type === 'GUILD_TEXT') {
           channelData.rateLimitPerUser = channel.rateLimitPerUser || undefined;
         }
         
-        // Voice channel specific
-        if (channel.type === 'GUILD_VOICE') {
-          channelData.bitrate = channel.bitrate || undefined;
-          channelData.userLimit =targetGuild) {
-    return res.json({ error: 'Missing fields' });
-  }
-
-  const result = db.prepare(
-    'INSERT INTO sessions (token, source_guild, target_guild, logs) VALUES (?, ?, ?, ?)'
-  ).run(token, sourceGuild, targetGuild, '[]');
-
-  const sessionId = result.lastInsertRowid;
-
-  res.json({ success: true, id: sessionId });
-  setImmediate(() => runClone(sessionId, token, sourceGuild, targetGuild));
-});
-
-async function runClone(sessionId, token, sourceGuild, targetGuild) {
-  const selfClient = new SelfClient({ 
-    checkUpdate: false,
-    autoRedeemNitro: false,
-    ws: {
-      properties: getSuperProperties()
-    }
-  });
-
-  try {
-    addLog(sessionId, '🔑 Logging in...');
-    
-    await selfClient.login(token);
-    
-    addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
-
-    const source = await selfClient.guilds.fetch(sourceGuild, { force: true }).catch(e => {
-      throw new Error(`Cannot access source server: ${e.message}`);
-    });
-    
-    const target = await selfClient.guilds.fetch(targetGuild, { force: true }).catch(e => {
-      throw new Error(`Cannot access target server: ${e.message}`);
-    });
-
-    addLog(sessionId, `✅ Source: ${source.name} | Target: ${target.name}`);
-
-    db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
-      .run(source.name, target.name, 'deleting', sessionId);
-
-    broadcast({ type: 'status', id: sessionId, status: 'deleting' });
-
-    await target.channels.fetch();
-    await target.roles.fetch();
-
-    for (const [, role] of target.roles.cache.filter(r => r.name !== '@everyone' && r.editable)) {
-      try {
-        await role.delete();
-        addLog(sessionId, `❌ Deleted role: ${role.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
-      }
-    }
-
-    for (const channel of target.channels.cache.values()) {
-      try {
-        await channel.delete();
-        addLog(sessionId, `❌ Deleted channel: #${channel.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
-      }
-    }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    const freshTarget = await selfClient.guilds.fetch(targetGuild, { force: true });
-
-    db.prepare('UPDATE sessions SET status = ? WHERE id = ?')
-      .run('cloning', sessionId);
-
-    broadcast({ type: 'status', id: sessionId, status: 'cloning' });
-
-    await freshTarget.setName(source.name);
-
-    if (source.icon) {
-      try {
-        await freshTarget.setIcon(source.iconURL({ dynamic: true }));
-        addLog(sessionId, '🖼️ Icon copied');
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to copy icon: ${err.message}`);
-      }
-    }
-
-    // FETCH SOURCE DATA
-    addLog(sessionId, '📥 Fetching source server data...');
-    await source.roles.fetch();
-    await source.channels.fetch();
-
-    // CREATE ROLES (in reverse order to maintain position)
-    addLog(sessionId, '🎭 Creating roles...');
-    const roleMap = new Map(); // old role ID -> new role
-    
-    const sortedRoles = source.roles.cache
-      .filter(r => r.name !== '@everyone')
-      .sort((a, b) => b.position - a.position);
-
-    for (const [, role] of sortedRoles) {
-      try {
-        const newRole = await freshTarget.roles.create({
-          name: role.name,
-          color: role.color,
-          hoist: role.hoist,
-          mentionable: role.mentionable,
-          permissions: role.permissions.bitfield,
-          position: role.position
-        });
-        roleMap.set(role.id, newRole);
-        addLog(sessionId, `✅ Created role: ${role.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
-      }
-    }
-
-    // GET @everyone ROLE FOR PERMISSION OVERWRITES
-    const everyoneRole = freshTarget.roles.everyone;
-
-    // CREATE CATEGORIES FIRST
-    addLog(sessionId, '📁 Creating categories...');
-    const categoryMap = new Map(); // old channel ID -> new channel
-    
-    const categories = source.channels.cache
-      .filter(c => c.type === 'GUILD_CATEGORY')
-      .sort((a, b) => a.position - b.position);
-
-    for (const [, category] of categories) {
-      try {
-        const permissionOverwrites = category.permissionOverwrites.cache.map(overwrite => {
-          const roleId = overwrite.id === source.roles.everyone.id 
-            ? everyoneRole.id 
-            : (roleMap.get(overwrite.id)?.id || overwrite.id);
-          
-          return {
-            id: roleId,
-            allow: overwrite.allow.bitfield,
-            deny: overwrite.deny.bitfield,
-            type: overwrite.type
-          };
-        });
-
-        const newCategory = await freshTarget.channels.create(category.name, {
-          type: 'GUILD_CATEGORY',
-          position: category.position,
-          permissionOverwrites: permissionOverwrites
-        });
-        
-        categoryMap.set(category.id, newCategory);
-        addLog(sessionId, `✅ Created category: ${category.name}`);
-        await new Promise(r => setTimeout(r, 350));
-      } catch (err) {
-        addLog(sessionId, `❌ Failed to create category ${category.name}: ${err.message}`);
-      }
-    }
-
-    // CREATE CHANNELS
-    addLog(sessionId, '💬 Creating channels...');
-    
-    const channels = source.channels.cache
-      .filter(c => c.type !== 'GUILD_CATEGORY')
-      .sort((a, b) => a.position - b.position);
-
-    for (const [, channel] of channels) {
-      try {
-        const parentId = channel.parentId ? categoryMap.get(channel.parentId)?.id : null;
-        
-        const permissionOverwrites = channel.permissionOverwrites.cache.map(overwrite => {
-          const roleId = overwrite.id === source.roles.everyone.id 
-            ? everyoneRole.id 
-            : (roleMap.get(overwrite.id)?.id || overwrite.id);
-          
-          return {
-            id: roleId,
-            allow: overwrite.allow.bitfield,
-            deny: overwrite.deny.bitfield,
-            type: overwrite.type
-          };
-        });
-
-        const channelData = {
-          type: channel.type,
-          topic: channel.topic || undefined,
-          nsfw: channel.nsfw || undefined,
-          parent: parentId || undefined,
-          position: channel.position,
-          permissionOverwrites: permissionOverwrites
-        };
-
-        // Text channel specific
-        if (channel.type === 'GUILD_TEXT') {
-          channelData.rateLimitPerUser = channel.rateLimitPerUser || undefined;
-        }
-        
-        // Voice channel specific
         if (channel.type === 'GUILD_VOICE') {
           channelData.bitrate = channel.bitrate || undefined;
           channelData.userLimit = channel.userLimit || undefined;
