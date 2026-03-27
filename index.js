@@ -69,21 +69,28 @@ app.post('/api/clone', async (req, res) => {
 });
 
 async function runClone(sessionId, token, sourceGuild, targetGuild) {
-  const selfClient = new SelfClient({ checkUpdate: false });
-  selfClient.options.http.api = 'https://discord.com/api/v9';
-  selfClient.options.ws.properties = getSuperProperties();
+  const selfClient = new SelfClient({ 
+    checkUpdate: false,
+    autoRedeemNitro: false,
+    ws: {
+      properties: getSuperProperties()
+    }
+  });
 
   try {
     addLog(sessionId, '🔑 Logging in...');
-    await Promise.race([
-      selfClient.login(token),
-      new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 15000))
-    ]);
-
+    
+    await selfClient.login(token);
+    
     addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
 
-    const source = await selfClient.guilds.fetch(sourceGuild, { force: true });
-    const target = await selfClient.guilds.fetch(targetGuild, { force: true });
+    const source = await selfClient.guilds.fetch(sourceGuild, { force: true }).catch(e => {
+      throw new Error(`Cannot access source server: ${e.message}`);
+    });
+    
+    const target = await selfClient.guilds.fetch(targetGuild, { force: true }).catch(e => {
+      throw new Error(`Cannot access target server: ${e.message}`);
+    });
 
     addLog(sessionId, `✅ Source: ${source.name} | Target: ${target.name}`);
 
@@ -99,16 +106,20 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
       try {
         await role.delete();
         addLog(sessionId, `❌ Role: ${role.name}`);
-        await new Promise(r => setTimeout(r, 300));
-      } catch {}
+        await new Promise(r => setTimeout(r, 350));
+      } catch (err) {
+        addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
+      }
     }
 
     for (const channel of target.channels.cache.values()) {
       try {
         await channel.delete();
         addLog(sessionId, `❌ Channel: #${channel.name}`);
-        await new Promise(r => setTimeout(r, 300));
-      } catch {}
+        await new Promise(r => setTimeout(r, 350));
+      } catch (err) {
+        addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
+      }
     }
 
     await new Promise(r => setTimeout(r, 1000));
@@ -123,7 +134,12 @@ async function runClone(sessionId, token, sourceGuild, targetGuild) {
     await freshTarget.setName(source.name);
 
     if (source.icon) {
-      await freshTarget.setIcon(source.iconURL({ dynamic: true }));
+      try {
+        await freshTarget.setIcon(source.iconURL({ dynamic: true }));
+        addLog(sessionId, '🖼️ Icon copied');
+      } catch (err) {
+        addLog(sessionId, `⚠️ Failed to copy icon: ${err.message}`);
+      }
     }
 
     selfClient.destroy();
