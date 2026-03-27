@@ -75,7 +75,7 @@ app.post('/api/clone', async (req, res) => {
     return res.json({ error: 'Missing fields' });
   }
 
-  const opts = options || { banner: true, icon: true, channels: true, roles: true };
+  const opts = options || { all: true, banner: true, icon: true, channels: true, roles: true };
 
   const result = db.prepare(
     'INSERT INTO sessions (token, source_guild, target_guild, logs, options) VALUES (?, ?, ?, ?, ?)'
@@ -121,22 +121,42 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     await target.channels.fetch();
     await target.roles.fetch();
 
-    // DELETE ROLES if roles option is enabled
-    if (options.roles !== false) {
+    const botMember = await target.members.fetch(selfClient.user.id);
+    const botHighestRole = botMember.roles.highest;
+
+    const shouldDoRoles = options.all === true || options.roles !== false;
+    const shouldDoChannels = options.all === true || options.channels !== false;
+    const shouldDoIcon = options.all === true || options.icon !== false;
+    const shouldDoBanner = options.all === true || options.banner !== false;
+
+    // DELETE ROLES
+    if (shouldDoRoles) {
       addLog(sessionId, '🗑️ Deleting old roles...');
-      for (const [, role] of target.roles.cache.filter(r => r.name !== '@everyone' && r.editable)) {
+      
+      const rolesToDelete = target.roles.cache
+        .filter(r => r.name !== '@everyone' && r.id !== target.roles.everyone.id)
+        .sort((a, b) => b.position - a.position);
+
+      addLog(sessionId, `Found ${rolesToDelete.size} roles to delete`);
+
+      for (const [, role] of rolesToDelete) {
         try {
+          if (botHighestRole.position <= role.position) {
+            addLog(sessionId, `⚠️ Cannot delete ${role.name} - higher than bot`);
+            continue;
+          }
+          
           await role.delete();
           addLog(sessionId, `❌ Deleted role: ${role.name}`);
-          await new Promise(r => setTimeout(r, 350));
+          await new Promise(r => setTimeout(r, 400));
         } catch (err) {
           addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
         }
       }
     }
 
-    // DELETE CHANNELS if channels option is enabled
-    if (options.channels !== false) {
+    // DELETE CHANNELS
+    if (shouldDoChannels) {
       addLog(sessionId, '🗑️ Deleting old channels...');
       for (const channel of target.channels.cache.values()) {
         try {
@@ -160,7 +180,8 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     await freshTarget.setName(source.name);
 
-    if (options.icon !== false && source.icon) {
+    // COPY ICON
+    if (shouldDoIcon && source.icon) {
       try {
         await freshTarget.setIcon(source.iconURL({ dynamic: true }));
         addLog(sessionId, '🖼️ Icon copied');
@@ -169,7 +190,8 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
       }
     }
 
-    if (options.banner !== false && source.banner) {
+    // COPY BANNER
+    if (shouldDoBanner && source.banner) {
       try {
         await freshTarget.setBanner(source.bannerURL({ dynamic: true }));
         addLog(sessionId, '🎨 Banner copied');
@@ -178,7 +200,8 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
       }
     }
 
-    if (options.channels === false && options.roles === false) {
+    // If only icon/banner, finish early
+    if (!shouldDoRoles && !shouldDoChannels) {
       addLog(sessionId, '🎉 Clone complete! (Server info only)');
       db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
       broadcast({ type: 'complete', id: sessionId });
@@ -191,7 +214,8 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     const roleMap = new Map();
     
-    if (options.roles !== false) {
+    // CREATE ROLES
+    if (shouldDoRoles) {
       addLog(sessionId, '🎭 Creating roles...');
       
       const sortedRoles = source.roles.cache
@@ -209,7 +233,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           });
           roleMap.set(role.id, newRole);
           addLog(sessionId, `✅ Created role: ${role.name}`);
-          await new Promise(r => setTimeout(r, 350));
+          await new Promise(r => setTimeout(r, 400));
         } catch (err) {
           addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
         }
@@ -218,7 +242,8 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     const everyoneRole = freshTarget.roles.everyone;
 
-    if (options.channels !== false) {
+    // CREATE CATEGORIES & CHANNELS
+    if (shouldDoChannels) {
       addLog(sessionId, '📁 Creating categories...');
       const categoryMap = new Map();
       
