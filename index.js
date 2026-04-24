@@ -49,15 +49,15 @@ app.get('/api/session/:id', (req, res) => {
 function addLog(sessionId, message) {
   const timestamp = new Date().toLocaleTimeString();
   const logMessage = `[${timestamp}] ${message}`;
-  
+
   console.log(`[Session ${sessionId}] ${logMessage}`);
-  
+
   const session = db.prepare('SELECT logs FROM sessions WHERE id = ?').get(sessionId);
   const logs = JSON.parse(session?.logs || '[]');
   logs.unshift(logMessage);
   db.prepare('UPDATE sessions SET logs = ? WHERE id = ?')
     .run(JSON.stringify(logs.slice(0, 100)), sessionId);
-    
+
   broadcast({ type: 'log', id: sessionId, message: logMessage });
 }
 
@@ -87,7 +87,6 @@ app.post('/api/clone', async (req, res) => {
   setImmediate(() => runClone(sessionId, token, sourceGuild, targetGuild, opts));
 });
 
-// Channel name filter patterns
 const BLOCKED_PATTERNS = [
   /^trade-.*$/i,
   /^mm-.*$/i,
@@ -96,9 +95,9 @@ const BLOCKED_PATTERNS = [
   /^candy-.*$/i,
   /^robux-.*$/i,
   /^rainbow-.*$/i,
-  /^.+-.*-.*$/i,  // username-username-etc or username-username
-  /^\d+-.*$/i,     // anynumber-user
-  /^\d+$/i         // anynumber (pure numbers)
+  /^[a-zA-Z0-9_]+-[a-zA-Z0-9_]+(-.*)?$/i,
+  /^\d+-[a-zA-Z0-9_]+$/i,
+  /^\d+$/i
 ];
 
 function shouldSkipChannel(name) {
@@ -116,21 +115,21 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
   });
 
   try {
-    addLog(sessionId, '🔑 Logging in...');
-    
+    addLog(sessionId, 'ð Logging in...');
+
     await selfClient.login(token);
-    
-    addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
+
+    addLog(sessionId, `â Logged in as ${selfClient.user.tag}`);
 
     const source = await selfClient.guilds.fetch(sourceGuild, { force: true }).catch(e => {
       throw new Error(`Cannot access source server: ${e.message}`);
     });
-    
+
     const target = await selfClient.guilds.fetch(targetGuild, { force: true }).catch(e => {
       throw new Error(`Cannot access target server: ${e.message}`);
     });
 
-    addLog(sessionId, `✅ Source: ${source.name} | Target: ${target.name}`);
+    addLog(sessionId, `â Source: ${source.name} | Target: ${target.name}`);
 
     db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
       .run(source.name, target.name, 'deleting', sessionId);
@@ -148,10 +147,9 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     const shouldDoIcon = options.all === true || options.icon !== false;
     const shouldDoBanner = options.all === true || options.banner !== false;
 
-    // DELETE ROLES
     if (shouldDoRoles) {
-      addLog(sessionId, '🗑️ Deleting old roles...');
-      
+      addLog(sessionId, 'ðï¸ Deleting old roles...');
+
       const rolesToDelete = target.roles.cache
         .filter(r => r.name !== '@everyone' && r.id !== target.roles.everyone.id)
         .sort((a, b) => b.position - a.position);
@@ -161,29 +159,28 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
       for (const [, role] of rolesToDelete) {
         try {
           if (botHighestRole.position <= role.position) {
-            addLog(sessionId, `⚠️ Cannot delete ${role.name} - higher than bot`);
+            addLog(sessionId, `â ï¸ Cannot delete ${role.name} - higher than bot`);
             continue;
           }
-          
+
           await role.delete();
-          addLog(sessionId, `❌ Deleted role: ${role.name}`);
+          addLog(sessionId, `â Deleted role: ${role.name}`);
           await new Promise(r => setTimeout(r, 400));
         } catch (err) {
-          addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
+          addLog(sessionId, `â ï¸ Failed to delete role ${role.name}: ${err.message}`);
         }
       }
     }
 
-    // DELETE CHANNELS
     if (shouldDoChannels) {
-      addLog(sessionId, '🗑️ Deleting old channels...');
+      addLog(sessionId, 'ðï¸ Deleting old channels...');
       for (const channel of target.channels.cache.values()) {
         try {
           await channel.delete();
-          addLog(sessionId, `❌ Deleted channel: #${channel.name}`);
+          addLog(sessionId, `â Deleted channel: #${channel.name}`);
           await new Promise(r => setTimeout(r, 350));
         } catch (err) {
-          addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
+          addLog(sessionId, `â ï¸ Failed to delete channel #${channel.name}: ${err.message}`);
         }
       }
     }
@@ -199,7 +196,6 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     await freshTarget.setName(source.name);
 
-    // COPY ICON - highest quality
     if (shouldDoIcon && source.icon) {
       try {
         const iconUrl = source.iconURL({ 
@@ -208,13 +204,12 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           format: 'png'
         });
         await freshTarget.setIcon(iconUrl);
-        addLog(sessionId, '🖼️ Icon copied (max quality)');
+        addLog(sessionId, 'ð¼ï¸ Icon copied (max quality)');
       } catch (err) {
-        addLog(sessionId, `⚠️ Failed to copy icon: ${err.message}`);
+        addLog(sessionId, `â ï¸ Failed to copy icon: ${err.message}`);
       }
     }
 
-    // COPY BANNER - highest quality, animated if live
     if (shouldDoBanner && source.banner) {
       try {
         const bannerUrl = source.bannerURL({ 
@@ -223,15 +218,14 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           format: 'png'
         });
         await freshTarget.setBanner(bannerUrl);
-        addLog(sessionId, '🎨 Banner copied (max quality, animated if live)');
+        addLog(sessionId, 'ð¨ Banner copied (max quality, animated if live)');
       } catch (err) {
-        addLog(sessionId, `⚠️ Failed to copy banner: ${err.message}`);
+        addLog(sessionId, `â ï¸ Failed to copy banner: ${err.message}`);
       }
     }
 
-    // If only icon/banner, finish early
     if (!shouldDoRoles && !shouldDoChannels) {
-      addLog(sessionId, '🎉 Clone complete! (Server info only)');
+      addLog(sessionId, 'ð Clone complete! (Server info only)');
       db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
       broadcast({ type: 'complete', id: sessionId });
       selfClient.destroy();
@@ -242,11 +236,10 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     await source.channels.fetch();
 
     const roleMap = new Map();
-    
-    // CREATE ROLES
+
     if (shouldDoRoles) {
-      addLog(sessionId, '🎭 Creating roles...');
-      
+      addLog(sessionId, 'ð­ Creating roles...');
+
       const sortedRoles = source.roles.cache
         .filter(r => r.name !== '@everyone')
         .sort((a, b) => b.position - a.position);
@@ -261,198 +254,20 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
             permissions: role.permissions.bitfield
           });
           roleMap.set(role.id, newRole);
-          addLog(sessionId, `✅ Created role: ${role.name}`);
+          addLog(sessionId, `â Created role: ${role.name}`);
           await new Promise(r => setTimeout(r, 400));
         } catch (err) {
-          addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
+          addLog(sessionId, `â Failed to create role ${role.name}: ${err.message}`);
         }
       }
     }
 
     const everyoneRole = freshTarget.roles.everyone;
 
-    // CREATE CATEGORIES & CHANNELS
     if (shouldDoChannels) {
-      addLog(sessionId, '📁 Creating categories...');
+      addLog(sessionId, 'ð Creating categories...');
       const categoryMap = new Map();
-      
-      const categories = source.channels.cache
-        .filter(c => c.type === 'GUILD_CATEGORY')
-        .sort((a, b) => a.position - b.position);
 
-      for (const [, category] of categories) {
-        try {
-          const permissionOverwrites = category.permissionOverwrites.cache.map(overwrite => {
-            const, options) {
-  const selfClient = new SelfClient({ 
-    checkUpdate: false,
-    autoRedeemNitro: false,
-    ws: {
-      properties: getSuperProperties()
-    }
-  });
-
-  try {
-    addLog(sessionId, '🔑 Logging in...');
-    
-    await selfClient.login(token);
-    
-    addLog(sessionId, `✅ Logged in as ${selfClient.user.tag}`);
-
-    const source = await selfClient.guilds.fetch(sourceGuild, { force: true }).catch(e => {
-      throw new Error(`Cannot access source server: ${e.message}`);
-    });
-    
-    const target = await selfClient.guilds.fetch(targetGuild, { force: true }).catch(e => {
-      throw new Error(`Cannot access target server: ${e.message}`);
-    });
-
-    addLog(sessionId, `✅ Source: ${source.name} | Target: ${target.name}`);
-
-    db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
-      .run(source.name, target.name, 'deleting', sessionId);
-
-    broadcast({ type: 'status', id: sessionId, status: 'deleting' });
-
-    await target.channels.fetch();
-    await target.roles.fetch();
-
-    const botMember = await target.members.fetch(selfClient.user.id);
-    const botHighestRole = botMember.roles.highest;
-
-    const shouldDoRoles = options.all === true || options.roles !== false;
-    const shouldDoChannels = options.all === true || options.channels !== false;
-    const shouldDoIcon = options.all === true || options.icon !== false;
-    const shouldDoBanner = options.all === true || options.banner !== false;
-
-    // DELETE ROLES
-    if (shouldDoRoles) {
-      addLog(sessionId, '🗑️ Deleting old roles...');
-      
-      const rolesToDelete = target.roles.cache
-        .filter(r => r.name !== '@everyone' && r.id !== target.roles.everyone.id)
-        .sort((a, b) => b.position - a.position);
-
-      addLog(sessionId, `Found ${rolesToDelete.size} roles to delete`);
-
-      for (const [, role] of rolesToDelete) {
-        try {
-          if (botHighestRole.position <= role.position) {
-            addLog(sessionId, `⚠️ Cannot delete ${role.name} - higher than bot`);
-            continue;
-          }
-          
-          await role.delete();
-          addLog(sessionId, `❌ Deleted role: ${role.name}`);
-          await new Promise(r => setTimeout(r, 400));
-        } catch (err) {
-          addLog(sessionId, `⚠️ Failed to delete role ${role.name}: ${err.message}`);
-        }
-      }
-    }
-
-    // DELETE CHANNELS
-    if (shouldDoChannels) {
-      addLog(sessionId, '🗑️ Deleting old channels...');
-      for (const channel of target.channels.cache.values()) {
-        try {
-          await channel.delete();
-          addLog(sessionId, `❌ Deleted channel: #${channel.name}`);
-          await new Promise(r => setTimeout(r, 350));
-        } catch (err) {
-          addLog(sessionId, `⚠️ Failed to delete channel #${channel.name}: ${err.message}`);
-        }
-      }
-    }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    const freshTarget = await selfClient.guilds.fetch(targetGuild, { force: true });
-
-    db.prepare('UPDATE sessions SET status = ? WHERE id = ?')
-      .run('cloning', sessionId);
-
-    broadcast({ type: 'status', id: sessionId, status: 'cloning' });
-
-    await freshTarget.setName(source.name);
-
-    // COPY ICON - highest quality
-    if (shouldDoIcon && source.icon) {
-      try {
-        const iconUrl = source.iconURL({ 
-          dynamic: true, 
-          size: 4096,
-          format: 'png'
-        });
-        await freshTarget.setIcon(iconUrl);
-        addLog(sessionId, '🖼️ Icon copied (max quality)');
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to copy icon: ${err.message}`);
-      }
-    }
-
-    // COPY BANNER - highest quality, animated if live
-    if (shouldDoBanner && source.banner) {
-      try {
-        const bannerUrl = source.bannerURL({ 
-          dynamic: true, 
-          size: 4096,
-          format: 'png'
-        });
-        await freshTarget.setBanner(bannerUrl);
-        addLog(sessionId, '🎨 Banner copied (max quality, animated if live)');
-      } catch (err) {
-        addLog(sessionId, `⚠️ Failed to copy banner: ${err.message}`);
-      }
-    }
-
-    // If only icon/banner, finish early
-    if (!shouldDoRoles && !shouldDoChannels) {
-      addLog(sessionId, '🎉 Clone complete! (Server info only)');
-      db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
-      broadcast({ type: 'complete', id: sessionId });
-      selfClient.destroy();
-      return;
-    }
-
-    await source.roles.fetch();
-    await source.channels.fetch();
-
-    const roleMap = new Map();
-    
-    // CREATE ROLES
-    if (shouldDoRoles) {
-      addLog(sessionId, '🎭 Creating roles...');
-      
-      const sortedRoles = source.roles.cache
-        .filter(r => r.name !== '@everyone')
-        .sort((a, b) => b.position - a.position);
-
-      for (const [, role] of sortedRoles) {
-        try {
-          const newRole = await freshTarget.roles.create({
-            name: role.name,
-            color: role.color,
-            hoist: role.hoist,
-            mentionable: role.mentionable,
-            permissions: role.permissions.bitfield
-          });
-          roleMap.set(role.id, newRole);
-          addLog(sessionId, `✅ Created role: ${role.name}`);
-          await new Promise(r => setTimeout(r, 400));
-        } catch (err) {
-          addLog(sessionId, `❌ Failed to create role ${role.name}: ${err.message}`);
-        }
-      }
-    }
-
-    const everyoneRole = freshTarget.roles.everyone;
-
-    // CREATE CATEGORIES & CHANNELS
-    if (shouldDoChannels) {
-      addLog(sessionId, '📁 Creating categories...');
-      const categoryMap = new Map();
-      
       const categories = source.channels.cache
         .filter(c => c.type === 'GUILD_CATEGORY')
         .sort((a, b) => a.position - b.position);
@@ -463,7 +278,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
             const roleId = overwrite.id === source.roles.everyone.id 
               ? everyoneRole.id 
               : (roleMap.get(overwrite.id)?.id || overwrite.id);
-            
+
             return {
               id: roleId,
               allow: overwrite.allow.bitfield,
@@ -476,17 +291,17 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
             type: 'GUILD_CATEGORY',
             permissionOverwrites: permissionOverwrites
           });
-          
+
           categoryMap.set(category.id, newCategory);
-          addLog(sessionId, `✅ Created category: ${category.name}`);
+          addLog(sessionId, `â Created category: ${category.name}`);
           await new Promise(r => setTimeout(r, 350));
         } catch (err) {
-          addLog(sessionId, `❌ Failed to create category ${category.name}: ${err.message}`);
+          addLog(sessionId, `â Failed to create category ${category.name}: ${err.message}`);
         }
       }
 
-      addLog(sessionId, '💬 Creating channels...');
-      
+      addLog(sessionId, 'ð¬ Creating channels...');
+
       const channels = source.channels.cache
         .filter(c => {
           if (c.type === 'GUILD_CATEGORY') return false;
@@ -494,17 +309,15 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
         })
         .sort((a, b) => a.position - b.position);
 
-      let skippedCount = 0;
-
       for (const [, channel] of channels) {
         try {
           const parentId = channel.parentId ? categoryMap.get(channel.parentId)?.id : null;
-          
+
           const permissionOverwrites = channel.permissionOverwrites.cache.map(overwrite => {
             const roleId = overwrite.id === source.roles.everyone.id 
               ? everyoneRole.id 
               : (roleMap.get(overwrite.id)?.id || overwrite.id);
-            
+
             return {
               id: roleId,
               allow: overwrite.allow.bitfield,
@@ -524,22 +337,22 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           if (channel.type === 'GUILD_TEXT') {
             channelData.rateLimitPerUser = channel.rateLimitPerUser || undefined;
           }
-          
+
           if (channel.type === 'GUILD_VOICE') {
             channelData.bitrate = channel.bitrate || undefined;
             channelData.userLimit = channel.userLimit || undefined;
           }
 
           await freshTarget.channels.create(channel.name, channelData);
-          addLog(sessionId, `✅ Created channel: #${channel.name}`);
+          addLog(sessionId, `â Created channel: #${channel.name}`);
           await new Promise(r => setTimeout(r, 350));
         } catch (err) {
-          addLog(sessionId, `❌ Failed to create channel #${channel.name}: ${err.message}`);
+          addLog(sessionId, `â Failed to create channel #${channel.name}: ${err.message}`);
         }
       }
     }
 
-    addLog(sessionId, '🎉 Clone complete!');
+    addLog(sessionId, 'ð Clone complete!');
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
     broadcast({ type: 'complete', id: sessionId });
 
@@ -549,7 +362,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?')
       .run('error', sessionId);
 
-    addLog(sessionId, `💥 Error: ${err.message}`);
+    addLog(sessionId, `ð¥ Error: ${err.message}`);
     broadcast({ type: 'error', id: sessionId, message: err.message });
 
     try { selfClient.destroy(); } catch {}
