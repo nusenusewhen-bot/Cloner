@@ -75,7 +75,7 @@ app.post('/api/clone', async (req, res) => {
     return res.json({ error: 'Missing fields' });
   }
 
-  const opts = options || { all: true, banner: true, icon: true, channels: true, roles: true };
+  const opts = options || { all: true, banner: true, icon: true, splash: true, channels: true, roles: true };
 
   const result = db.prepare(
     'INSERT INTO sessions (token, source_guild, target_guild, logs, options) VALUES (?, ?, ?, ?, ?)'
@@ -146,6 +146,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     const shouldDoChannels = options.all === true || options.channels !== false;
     const shouldDoIcon = options.all === true || options.icon !== false;
     const shouldDoBanner = options.all === true || options.banner !== false;
+    const shouldDoSplash = options.all === true || options.splash !== false;
 
     if (shouldDoRoles) {
       addLog(sessionId, 'ðï¸ Deleting old roles...');
@@ -196,31 +197,50 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     await freshTarget.setName(source.name);
 
+    // âââ ICON (now preserves GIF for animated icons) âââ
     if (shouldDoIcon && source.icon) {
       try {
         const iconUrl = source.iconURL({ 
           dynamic: true, 
-          size: 4096,
-          format: 'png'
+          size: 4096
+          // Removed format: 'png' so GIF icons stay animated
         });
         await freshTarget.setIcon(iconUrl);
-        addLog(sessionId, 'ð¼ï¸ Icon copied (max quality)');
+        const isGif = iconUrl && iconUrl.endsWith('.gif');
+        addLog(sessionId, `ð¼ï¸ Icon copied (max quality${isGif ? ', animated GIF' : ''})`);
       } catch (err) {
         addLog(sessionId, `â ï¸ Failed to copy icon: ${err.message}`);
       }
     }
 
+    // âââ BANNER (now preserves GIF for animated banners) âââ
     if (shouldDoBanner && source.banner) {
       try {
         const bannerUrl = source.bannerURL({ 
           dynamic: true, 
-          size: 4096,
-          format: 'png'
+          size: 4096
+          // Removed format: 'png' so GIF banners stay animated
         });
         await freshTarget.setBanner(bannerUrl);
-        addLog(sessionId, 'ð¨ Banner copied (max quality, animated if live)');
+        const isGif = bannerUrl && bannerUrl.endsWith('.gif');
+        addLog(sessionId, `ð¨ Banner copied (max quality${isGif ? ', animated GIF' : ''})`);
       } catch (err) {
         addLog(sessionId, `â ï¸ Failed to copy banner: ${err.message}`);
+      }
+    }
+
+    // âââ NEW: INVITE SPLASH (server invite background) âââ
+    if (shouldDoSplash && source.splash) {
+      try {
+        const splashUrl = source.splashURL({ 
+          dynamic: true, 
+          size: 4096
+        });
+        await freshTarget.setSplash(splashUrl);
+        const isGif = splashUrl && splashUrl.endsWith('.gif');
+        addLog(sessionId, `ð Invite splash copied (max quality${isGif ? ', animated GIF' : ''})`);
+      } catch (err) {
+        addLog(sessionId, `â ï¸ Failed to copy invite splash: ${err.message}`);
       }
     }
 
