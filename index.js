@@ -69,12 +69,15 @@ function broadcast(data) {
   });
 }
 
-// Download image from URL into a Buffer so Discord receives exact bytes (preserves GIF animation)
-async function downloadImageBuffer(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const arrayBuffer = await res.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+// Manually construct Discord CDN URLs for guaranteed format + max quality.
+// - Animated assets (hash starts with "a_") force .gif so animation stays live.
+// - Static assets force .png for lossless max quality (avoids webp/jpg defaults).
+function getGuildAssetUrl(type, guildId, hash, size = 4096) {
+  if (!hash) return null;
+  const isAnimated = hash.startsWith('a_');
+  const format = isAnimated ? 'gif' : 'png';
+  const paths = { icon: 'icons', banner: 'banners', splash: 'splashes' };
+  return `https://cdn.discordapp.com/${paths[type]}/${guildId}/${hash}.${format}?size=${size}`;
 }
 
 app.post('/api/clone', async (req, res) => {
@@ -205,49 +208,39 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     await freshTarget.setName(source.name);
 
-    // --- ICON (uploaded as raw Buffer to preserve animated GIFs) ---
+    // --- ICON ---
     if (shouldDoIcon && source.icon) {
       try {
-        const iconUrl = source.iconURL({ 
-          dynamic: true, 
-          size: 4096
-        });
-        const iconBuffer = await downloadImageBuffer(iconUrl);
-        await freshTarget.setIcon(iconBuffer);
-        const isGif = iconUrl && iconUrl.endsWith('.gif');
-        addLog(sessionId, `Icon copied (4096 max quality${isGif ? ', animated GIF preserved' : ''})`);
+        const iconUrl = getGuildAssetUrl('icon', source.id, source.icon, 4096);
+        const isAnimated = source.icon.startsWith('a_');
+        addLog(sessionId, `Icon URL: ${iconUrl}`);
+        await freshTarget.setIcon(iconUrl);
+        addLog(sessionId, `Icon copied (4096, ${isAnimated ? 'animated GIF' : 'lossless PNG'})`);
       } catch (err) {
         addLog(sessionId, `Failed to copy icon: ${err.message}`);
       }
     }
 
-    // --- BANNER (uploaded as raw Buffer to preserve animated GIFs) ---
+    // --- BANNER ---
     if (shouldDoBanner && source.banner) {
       try {
-        const bannerUrl = source.bannerURL({ 
-          dynamic: true, 
-          size: 4096
-        });
-        const bannerBuffer = await downloadImageBuffer(bannerUrl);
-        await freshTarget.setBanner(bannerBuffer);
-        const isGif = bannerUrl && bannerUrl.endsWith('.gif');
-        addLog(sessionId, `Banner copied (4096 max quality${isGif ? ', animated GIF preserved' : ''})`);
+        const bannerUrl = getGuildAssetUrl('banner', source.id, source.banner, 4096);
+        const isAnimated = source.banner.startsWith('a_');
+        addLog(sessionId, `Banner URL: ${bannerUrl}`);
+        await freshTarget.setBanner(bannerUrl);
+        addLog(sessionId, `Banner copied (4096, ${isAnimated ? 'animated GIF' : 'lossless PNG'})`);
       } catch (err) {
         addLog(sessionId, `Failed to copy banner: ${err.message}`);
       }
     }
 
-    // --- INVITE SPLASH / DISCOVERY BACKGROUND (uploaded as raw Buffer) ---
+    // --- INVITE SPLASH (server invite background) ---
     if (shouldDoSplash && source.splash) {
       try {
-        const splashUrl = source.splashURL({ 
-          dynamic: true, 
-          size: 4096
-        });
-        const splashBuffer = await downloadImageBuffer(splashUrl);
-        await freshTarget.setSplash(splashBuffer);
-        const isGif = splashUrl && splashUrl.endsWith('.gif');
-        addLog(sessionId, `Invite splash copied (4096 max quality${isGif ? ', animated GIF preserved' : ''})`);
+        const splashUrl = getGuildAssetUrl('splash', source.id, source.splash, 4096);
+        addLog(sessionId, `Splash URL: ${splashUrl}`);
+        await freshTarget.setSplash(splashUrl);
+        addLog(sessionId, `Invite splash copied (4096, lossless PNG)`);
       } catch (err) {
         addLog(sessionId, `Failed to copy invite splash: ${err.message}`);
       }
