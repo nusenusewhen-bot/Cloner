@@ -69,6 +69,14 @@ function broadcast(data) {
   });
 }
 
+// Download image from URL into a Buffer so Discord receives exact bytes (preserves GIF animation)
+async function downloadImageBuffer(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 app.post('/api/clone', async (req, res) => {
   const { token, sourceGuild, targetGuild, options } = req.body;
   if (!token || !sourceGuild || !targetGuild) {
@@ -115,11 +123,11 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
   });
 
   try {
-    addLog(sessionId, 'ð Logging in...');
+    addLog(sessionId, 'Logging in...');
 
     await selfClient.login(token);
 
-    addLog(sessionId, `â Logged in as ${selfClient.user.tag}`);
+    addLog(sessionId, `Logged in as ${selfClient.user.tag}`);
 
     const source = await selfClient.guilds.fetch(sourceGuild, { force: true }).catch(e => {
       throw new Error(`Cannot access source server: ${e.message}`);
@@ -129,7 +137,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
       throw new Error(`Cannot access target server: ${e.message}`);
     });
 
-    addLog(sessionId, `â Source: ${source.name} | Target: ${target.name}`);
+    addLog(sessionId, `Source: ${source.name} | Target: ${target.name}`);
 
     db.prepare('UPDATE sessions SET source_name = ?, target_name = ?, status = ? WHERE id = ?')
       .run(source.name, target.name, 'deleting', sessionId);
@@ -149,7 +157,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     const shouldDoSplash = options.all === true || options.splash !== false;
 
     if (shouldDoRoles) {
-      addLog(sessionId, 'ðï¸ Deleting old roles...');
+      addLog(sessionId, 'Deleting old roles...');
 
       const rolesToDelete = target.roles.cache
         .filter(r => r.name !== '@everyone' && r.id !== target.roles.everyone.id)
@@ -160,28 +168,28 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
       for (const [, role] of rolesToDelete) {
         try {
           if (botHighestRole.position <= role.position) {
-            addLog(sessionId, `â ï¸ Cannot delete ${role.name} - higher than bot`);
+            addLog(sessionId, `Cannot delete ${role.name} - higher than bot`);
             continue;
           }
 
           await role.delete();
-          addLog(sessionId, `â Deleted role: ${role.name}`);
+          addLog(sessionId, `Deleted role: ${role.name}`);
           await new Promise(r => setTimeout(r, 400));
         } catch (err) {
-          addLog(sessionId, `â ï¸ Failed to delete role ${role.name}: ${err.message}`);
+          addLog(sessionId, `Failed to delete role ${role.name}: ${err.message}`);
         }
       }
     }
 
     if (shouldDoChannels) {
-      addLog(sessionId, 'ðï¸ Deleting old channels...');
+      addLog(sessionId, 'Deleting old channels...');
       for (const channel of target.channels.cache.values()) {
         try {
           await channel.delete();
-          addLog(sessionId, `â Deleted channel: #${channel.name}`);
+          addLog(sessionId, `Deleted channel: #${channel.name}`);
           await new Promise(r => setTimeout(r, 350));
         } catch (err) {
-          addLog(sessionId, `â ï¸ Failed to delete channel #${channel.name}: ${err.message}`);
+          addLog(sessionId, `Failed to delete channel #${channel.name}: ${err.message}`);
         }
       }
     }
@@ -197,55 +205,56 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
 
     await freshTarget.setName(source.name);
 
-    // âââ ICON (now preserves GIF for animated icons) âââ
+    // --- ICON (uploaded as raw Buffer to preserve animated GIFs) ---
     if (shouldDoIcon && source.icon) {
       try {
         const iconUrl = source.iconURL({ 
           dynamic: true, 
           size: 4096
-          // Removed format: 'png' so GIF icons stay animated
         });
-        await freshTarget.setIcon(iconUrl);
+        const iconBuffer = await downloadImageBuffer(iconUrl);
+        await freshTarget.setIcon(iconBuffer);
         const isGif = iconUrl && iconUrl.endsWith('.gif');
-        addLog(sessionId, `ð¼ï¸ Icon copied (max quality${isGif ? ', animated GIF' : ''})`);
+        addLog(sessionId, `Icon copied (4096 max quality${isGif ? ', animated GIF preserved' : ''})`);
       } catch (err) {
-        addLog(sessionId, `â ï¸ Failed to copy icon: ${err.message}`);
+        addLog(sessionId, `Failed to copy icon: ${err.message}`);
       }
     }
 
-    // âââ BANNER (now preserves GIF for animated banners) âââ
+    // --- BANNER (uploaded as raw Buffer to preserve animated GIFs) ---
     if (shouldDoBanner && source.banner) {
       try {
         const bannerUrl = source.bannerURL({ 
           dynamic: true, 
           size: 4096
-          // Removed format: 'png' so GIF banners stay animated
         });
-        await freshTarget.setBanner(bannerUrl);
+        const bannerBuffer = await downloadImageBuffer(bannerUrl);
+        await freshTarget.setBanner(bannerBuffer);
         const isGif = bannerUrl && bannerUrl.endsWith('.gif');
-        addLog(sessionId, `ð¨ Banner copied (max quality${isGif ? ', animated GIF' : ''})`);
+        addLog(sessionId, `Banner copied (4096 max quality${isGif ? ', animated GIF preserved' : ''})`);
       } catch (err) {
-        addLog(sessionId, `â ï¸ Failed to copy banner: ${err.message}`);
+        addLog(sessionId, `Failed to copy banner: ${err.message}`);
       }
     }
 
-    // âââ NEW: INVITE SPLASH (server invite background) âââ
+    // --- INVITE SPLASH / DISCOVERY BACKGROUND (uploaded as raw Buffer) ---
     if (shouldDoSplash && source.splash) {
       try {
         const splashUrl = source.splashURL({ 
           dynamic: true, 
           size: 4096
         });
-        await freshTarget.setSplash(splashUrl);
+        const splashBuffer = await downloadImageBuffer(splashUrl);
+        await freshTarget.setSplash(splashBuffer);
         const isGif = splashUrl && splashUrl.endsWith('.gif');
-        addLog(sessionId, `ð Invite splash copied (max quality${isGif ? ', animated GIF' : ''})`);
+        addLog(sessionId, `Invite splash copied (4096 max quality${isGif ? ', animated GIF preserved' : ''})`);
       } catch (err) {
-        addLog(sessionId, `â ï¸ Failed to copy invite splash: ${err.message}`);
+        addLog(sessionId, `Failed to copy invite splash: ${err.message}`);
       }
     }
 
     if (!shouldDoRoles && !shouldDoChannels) {
-      addLog(sessionId, 'ð Clone complete! (Server info only)');
+      addLog(sessionId, 'Clone complete! (Server info only)');
       db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
       broadcast({ type: 'complete', id: sessionId });
       selfClient.destroy();
@@ -258,7 +267,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     const roleMap = new Map();
 
     if (shouldDoRoles) {
-      addLog(sessionId, 'ð­ Creating roles...');
+      addLog(sessionId, 'Creating roles...');
 
       const sortedRoles = source.roles.cache
         .filter(r => r.name !== '@everyone')
@@ -274,10 +283,10 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
             permissions: role.permissions.bitfield
           });
           roleMap.set(role.id, newRole);
-          addLog(sessionId, `â Created role: ${role.name}`);
+          addLog(sessionId, `Created role: ${role.name}`);
           await new Promise(r => setTimeout(r, 400));
         } catch (err) {
-          addLog(sessionId, `â Failed to create role ${role.name}: ${err.message}`);
+          addLog(sessionId, `Failed to create role ${role.name}: ${err.message}`);
         }
       }
     }
@@ -285,7 +294,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     const everyoneRole = freshTarget.roles.everyone;
 
     if (shouldDoChannels) {
-      addLog(sessionId, 'ð Creating categories...');
+      addLog(sessionId, 'Creating categories...');
       const categoryMap = new Map();
 
       const categories = source.channels.cache
@@ -313,14 +322,14 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           });
 
           categoryMap.set(category.id, newCategory);
-          addLog(sessionId, `â Created category: ${category.name}`);
+          addLog(sessionId, `Created category: ${category.name}`);
           await new Promise(r => setTimeout(r, 350));
         } catch (err) {
-          addLog(sessionId, `â Failed to create category ${category.name}: ${err.message}`);
+          addLog(sessionId, `Failed to create category ${category.name}: ${err.message}`);
         }
       }
 
-      addLog(sessionId, 'ð¬ Creating channels...');
+      addLog(sessionId, 'Creating channels...');
 
       const channels = source.channels.cache
         .filter(c => {
@@ -364,15 +373,15 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
           }
 
           await freshTarget.channels.create(channel.name, channelData);
-          addLog(sessionId, `â Created channel: #${channel.name}`);
+          addLog(sessionId, `Created channel: #${channel.name}`);
           await new Promise(r => setTimeout(r, 350));
         } catch (err) {
-          addLog(sessionId, `â Failed to create channel #${channel.name}: ${err.message}`);
+          addLog(sessionId, `Failed to create channel #${channel.name}: ${err.message}`);
         }
       }
     }
 
-    addLog(sessionId, 'ð Clone complete!');
+    addLog(sessionId, 'Clone complete!');
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('completed', sessionId);
     broadcast({ type: 'complete', id: sessionId });
 
@@ -382,7 +391,7 @@ async function runClone(sessionId, token, sourceGuild, targetGuild, options) {
     db.prepare('UPDATE sessions SET status = ? WHERE id = ?')
       .run('error', sessionId);
 
-    addLog(sessionId, `ð¥ Error: ${err.message}`);
+    addLog(sessionId, `Error: ${err.message}`);
     broadcast({ type: 'error', id: sessionId, message: err.message });
 
     try { selfClient.destroy(); } catch {}
